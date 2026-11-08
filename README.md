@@ -56,6 +56,7 @@ Open http://127.0.0.1:8770 in your browser.
 | **Reminders coming up** | Heads-ups it has scheduled from things you mentioned. |
 | **Hunches it formed** | Connections it found by itself. |
 | **New chat** | Starts a blank conversation. Old chats stay in the list, and memory is shared across all of them. |
+| **Clear chat** | Empties the open conversation. Long-term memory and hunches are kept. |
 | **Backend view** | Opens a live picture of what is happening inside (below). |
 
 ### Seeing what goes on inside

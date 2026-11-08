@@ -106,6 +106,13 @@ class ChatSession:
             self.state.new_chat()
         return True
 
+    def clear_chat(self) -> bool:
+        if self.responding:
+            return False
+        with self.state.lock:
+            self.state.clear_chat()
+        return True
+
     def open_chat(self, chat_id: int) -> bool:
         if self.responding:
             return False

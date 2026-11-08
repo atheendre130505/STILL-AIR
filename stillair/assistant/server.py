@@ -79,6 +79,8 @@ def make_server(port: int, session: ChatSession) -> ThreadingHTTPServer:
                     return self._json({"error": str(e)}, 502)
             if path == "/api/chat/new":
                 return self._json({"ok": True}) if session.new_chat() else self._json({"error": "a reply is in progress"}, 409)
+            if path == "/api/chat/clear":
+                return self._json({"ok": True}) if session.clear_chat() else self._json({"error": "a reply is in progress"}, 409)
             if path == "/api/chat/open":
                 chat_id = data.get("id")
                 if isinstance(chat_id, bool) or not isinstance(chat_id, int):

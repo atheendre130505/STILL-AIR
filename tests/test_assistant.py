@@ -175,6 +175,18 @@ class TestChats(unittest.TestCase):
         self.assertEqual(state.turns, [])
         self.assertEqual(state.mem.counts()["fact"], 1)
 
+    def test_clearing_empties_only_the_open_chat_and_keeps_memory(self):
+        state = SharedState()
+        state.add_turn("user", "first chat message")
+        state.new_chat()
+        state.add_turn("user", "second chat message")
+        note(state, "alpha one")
+        state.clear_chat()
+        self.assertEqual(state.turns, [])
+        self.assertEqual(state.chats[1]["title"], "")
+        self.assertEqual(state.chats[0]["turns"][0]["text"], "first chat message")
+        self.assertEqual(state.mem.counts()["fact"], 1)
+
     def test_blank_chats_do_not_pile_up(self):
         state = SharedState()
         state.new_chat()

@@ -25,10 +25,11 @@
   .msg { max-width:74%; padding:9px 13px; border-radius:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
   .user { align-self:flex-end; background:var(--accent); color:#fff; }
   .assistant { align-self:flex-start; background:var(--panel2); }
-  .titlebar { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  .titlebar { display:flex; align-items:center; gap:10px; margin-bottom:4px; flex-wrap:wrap; }
   .titlebar h1 { flex:none; }
-  .titlebar select { flex:1; min-width:0; margin:0; }
+  .titlebar select { flex:1 1 120px; min-width:0; margin:0; }
   .titlebar button { flex:none; padding:7px 12px; font-size:13px; }
+  .titlebar button.quiet { background:var(--panel2); color:var(--text); border:1px solid var(--line); }
   #backendlink { flex:none; color:var(--accent); font-size:13px; }
   .unprompted { border:1px solid var(--accent); }
   .unprompted small { display:block; color:var(--accent); font-size:11px; font-weight:600; margin-bottom:3px; }
@@ -67,6 +68,7 @@
         <h1>STILL AIR</h1>
         <select id="chats" aria-label="Open a chat"></select>
         <button id="newchat" type="button">New chat</button>
+        <button id="clearchat" type="button" class="quiet">Clear chat</button>
         <a id="backendlink" href="/backend" target="_blank" rel="noopener">Backend view</a>
       </div>
       <div class="sub" id="models"></div>
@@ -122,6 +124,7 @@ function render() {
   }
   if (document.activeElement !== $('chats')) $('chats').value = String(S.chat_id);
   $('newchat').disabled = $('chats').disabled = waiting || S.responding;
+  $('clearchat').disabled = waiting || S.responding || !S.turns.length;
   $('models').textContent =`conscious: ${S.main_model} (API) · subconscious: ${S.small_model} (on this laptop)`;
   if (document.activeElement !== $('sub')) $('sub').checked = S.enabled;
   if (document.activeElement !== $('limit')) $('limit').value = S.limit_minutes === null ? '' : String(S.limit_minutes);
@@ -143,6 +146,10 @@ $('form').onsubmit = async e => {
   try { await post('/api/say', {text}); } finally { waiting = false; pendingText = null; $('send').disabled = false; await refresh(); $('text').focus(); }
 };
 $('newchat').onclick = async () => { await post('/api/chat/new', {}); await refresh(); $('text').focus(); };
+$('clearchat').onclick = async () => {
+  if (!confirm('Clear this conversation? Long-term memory and hunches are kept.')) return;
+  await post('/api/chat/clear', {}); await refresh(); $('text').focus();
+};
 $('chats').onchange = async () => { await post('/api/chat/open', {id: +$('chats').value}); $('chats').blur(); await refresh(); };
 $('sub').onchange = async () => { await post('/api/subconscious', {on: $('sub').checked}); refresh(); };
 $('limit').onchange = async () => { await post('/api/subconscious', {limit_minutes: $('limit').value === '' ? null : +$('limit').value}); refresh(); };

@@ -79,6 +79,12 @@ class SharedState:
         self.current = blank["id"]
         self.save()
 
+    def clear_chat(self) -> None:
+        """Empty the open conversation. Long-term memory and hunches are kept."""
+        chat = self._chat()
+        chat["turns"], chat["title"] = [], ""
+        self.save()
+
     def open_chat(self, chat_id: int) -> bool:
         if not any(c["id"] == chat_id for c in self.chats):
             return False
