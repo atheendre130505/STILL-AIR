@@ -1,8 +1,3 @@
-"""Still Air: an idle loop for self-initiated AI thought (CIE 3 prototype).
+"""Still Air: an assistant with a large conscious model and a small local subconscious."""
 
-Roadmap step 1-4 of the concept document, implemented as a small, dependency-free
-Python package: persistent memory, perturbation source, selector + grounding, the
-idle loop itself, a task-mode agent, and the three-condition evaluation harness.
-"""
-
-__version__ = "0.1.0"
+__version__ = "0.2.0"

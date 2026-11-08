@@ -80,9 +80,9 @@
     </form>
   </section>
   <aside>
-    <div class="toggle">
-      <label for="sub">Subconscious</label>
-      <span class="switch"><input id="sub" type="checkbox"><span class="track"></span></span>
+    <div class="toggle" style="margin-bottom:10px">
+      <label for="conscious">Conscious (large model)</label>
+      <span class="switch"><input id="conscious" type="checkbox"><span class="track"></span></span>
     </div>
     <select id="limit" aria-label="How long the subconscious thinks after you stop">
       <option value="">Think until I send a message</option>
@@ -92,11 +92,11 @@
     </select>
     <div id="status"></div>
     <div id="err" role="alert"></div>
-    <h2>Reminders coming up</h2>
-    <div id="reminders"></div>
     <h2>Memory</h2>
     <div class="stats" id="stats"></div>
-    <h2>Hunches it formed</h2>
+    <h2>Still working on</h2>
+    <div id="problems"></div>
+    <h2>Worked out while idle</h2>
     <div id="hunches"></div>
     <h2>What it is thinking about</h2>
     <div id="thoughts"></div>
@@ -107,7 +107,7 @@ const $ = id => document.getElementById(id);
 let S = null, waiting = false, pendingText = null;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 const post = (path, body) => fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-const CLS = {'hunch stored':'ok', 'already known':'no', 'no connection':'no', 'rejected by its own check':'warn'};
+const CLS = {'concluded':'ok', 'already known':'no', 'dead end':'no', 'thinking':'no', 'digested':'warn', 'read':'warn', 'let go':'warn'};
 
 function renderTurns() {
   const box = $('turns'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
@@ -125,16 +125,16 @@ function render() {
   if (document.activeElement !== $('chats')) $('chats').value = String(S.chat_id);
   $('newchat').disabled = $('chats').disabled = waiting || S.responding;
   $('clearchat').disabled = waiting || S.responding || !S.turns.length;
-  $('models').textContent =`conscious: ${S.main_model} (API) · subconscious: ${S.small_model} (on this laptop)`;
-  if (document.activeElement !== $('sub')) $('sub').checked = S.enabled;
+  $('models').textContent =`conscious: ${S.conscious ? S.main_model + ' (API)' : 'off'} · subconscious: ${S.small_model} (on this laptop)`;
+  if (document.activeElement !== $('conscious')) $('conscious').checked = S.conscious;
   if (document.activeElement !== $('limit')) $('limit').value = S.limit_minutes === null ? '' : String(S.limit_minutes);
   const left = S.status === 'thinking' && S.minutes_left !== null ? ` (about ${S.minutes_left} min left)` : '';
-  $('status').textContent = S.enabled ? (S.responding ? 'paused while you are talking' : S.status + left) : 'off';
-  $('reminders').innerHTML = S.reminders.map(r => `<div class="card">${esc(r.text)}<small>${esc(new Date(r.at * 1000).toLocaleString())}</small></div>`).join('') || '<div class="stats">None set.</div>';
+  $('status').textContent = S.checking ? 'large model is checking everything that happened' : S.responding ? 'paused while you are talking' : S.status + left;
+  $('problems').innerHTML = S.problems.map(p => `<div class="card">${esc(p.text)}<small>${p.resting ? 'letting it go for a while · ' : ''}tried ${p.attempts} time${p.attempts === 1 ? '' : 's'}</small></div>`).join('') || '<div class="stats">Nothing unsolved.</div>';
   $('err').textContent = S.error || '';
-  $('stats').textContent = `${S.memories} memories · ${S.hunches.length} hunches · ${S.pairs_tried} pairs considered · ${S.paths_learned} paths learned · meaning search ${S.meaning_search ? 'on' : 'off'}`;
-  $('hunches').innerHTML = S.hunches.slice().reverse().map(h => `<div class="card">${esc(h.text)}<small>used ${h.used} time${h.used === 1 ? '' : 's'}</small></div>`).join('') || '<div class="stats">None yet.</div>';
-  $('thoughts').innerHTML = S.thoughts.slice().reverse().slice(0, 15).map(t => `<div class="card">${esc(t.a)} <b>+</b> ${esc(t.b)}${t.link ? '<br>→ ' + esc(t.link) : ''}<small class="${CLS[t.outcome] || ''}">${esc(t.outcome)}</small></div>`).join('') || '<div class="stats">Nothing yet.</div>';
+  $('stats').textContent = `${S.memories} memories · ${S.hunches.length} worked out · meaning search ${S.meaning_search ? 'on' : 'off'}`;
+  $('hunches').innerHTML = S.hunches.slice().reverse().map(h => `<div class="card">${esc(h.text)}<small>${h.confirmed ? 'checked' : 'not checked yet'} · used ${h.used} time${h.used === 1 ? '' : 's'}</small></div>`).join('') || '<div class="stats">None yet.</div>';
+  $('thoughts').innerHTML = S.thoughts.slice().reverse().slice(0, 15).map(t => `<div class="card">${esc(t.a)}${t.b ? ' <b>+</b> ' + esc(t.b) : ''}${t.link ? '<br>→ ' + esc(t.link) : ''}<small class="${CLS[t.outcome] || ''}">${esc(t.outcome)}</small></div>`).join('') || '<div class="stats">Nothing yet.</div>';
   renderTurns();
 }
 async function refresh() { try { S = await (await fetch('/api/state')).json(); render(); } catch (e) {} }
@@ -151,7 +151,7 @@ $('clearchat').onclick = async () => {
   await post('/api/chat/clear', {}); await refresh(); $('text').focus();
 };
 $('chats').onchange = async () => { await post('/api/chat/open', {id: +$('chats').value}); $('chats').blur(); await refresh(); };
-$('sub').onchange = async () => { await post('/api/subconscious', {on: $('sub').checked}); refresh(); };
+$('conscious').onchange = async () => { await post('/api/subconscious', {conscious: $('conscious').checked}); refresh(); };
 $('limit').onchange = async () => { await post('/api/subconscious', {limit_minutes: $('limit').value === '' ? null : +$('limit').value}); refresh(); };
 refresh(); setInterval(refresh, 1500);
 </script>

@@ -1,25 +1,21 @@
 # Still Air
 
-**An AI assistant that keeps thinking after you stop typing.**
+**An assistant that keeps working on your problems after you stop typing.**
 
 CIE 3 project · Abhishek Nair, Atheendre Ramesh, Kushi A Kumar
 
-Normal chatbots do nothing between your messages. Still Air has two parts that share one memory:
+You know when you can't solve something, so you take a break, and later the answer just comes to you? Or you learn a fact, and days later realise it connects to something else? That is called **incubation**. Normal chatbots can't do it, because they do nothing between messages. Still Air can.
 
-- A **conscious** mind: a larger model that answers you.
-- A **subconscious**: a small model on your own computer that quietly looks for connections in what you have told it, whenever you are not typing.
+- A **small model on your own computer** keeps thinking whenever you are not typing.
+- A **large model on an API** does almost no work. It answers when you speak to it, and briefly checks anything the small model believes it has solved.
 
-If it notices something useful, it tells you without being asked.
-
-**Example.** You mention a dentist appointment on Friday at 3pm. Later, you mention your sister's wedding rehearsal on Friday afternoon. You stop typing. A little later, this appears in the chat by itself:
-
-> Hey, just a heads-up: your dentist appointment at 3 PM on Friday might overlap with your sister's wedding rehearsal later that afternoon.
+**Example.** You tell it you moved your plants next to the radiator, and that the heating is on all day. Later you say your plants keep dying and you can't work out why. You leave. On its own, it reasons that the radiator is probably overheating them, and tells you.
 
 ---
 
 ## Setting it up
 
-You need three things: Python 3, a free Groq API key, and Ollama. Nothing else needs installing.
+You need Python 3, a free Groq API key, and Ollama. Python needs no extra packages.
 
 **1. Get a free key** at [console.groq.com](https://console.groq.com).
 
@@ -29,7 +25,7 @@ You need three things: Python 3, a free Groq API key, and Ollama. Nothing else n
 STILLAIR_API_KEY=your-key-here
 ```
 
-**3. Install [Ollama](https://ollama.com)**, then download the two small models (about 2.5 GB in total):
+**3. Install [Ollama](https://ollama.com)** and download the two small models (about 2.5 GB in total):
 
 ```bash
 ollama pull phi4-mini
@@ -39,177 +35,122 @@ ollama pull all-minilm
 **4. Start it:**
 
 ```bash
-python -m stillair chat
+python -m stillair
 ```
 
-Open http://127.0.0.1:8770 in your browser.
-
----
-
-## Using it
-
-| On the page | What it does |
-|---|---|
-| **Message box** | Talk to it normally. It remembers what you tell it. |
-| **Subconscious switch** | Turns background thinking on or off. |
-| **Think dropdown** | How long it thinks after you stop: until your next message, or 5, 15 or 60 minutes. |
-| **Reminders coming up** | Heads-ups it has scheduled from things you mentioned. |
-| **Hunches it formed** | Connections it found by itself. |
-| **New chat** | Starts a blank conversation. Old chats stay in the list, and memory is shared across all of them. |
-| **Clear chat** | Empties the open conversation. Long-term memory and hunches are kept. |
-| **Backend view** | Opens a live picture of what is happening inside (below). |
-
-### Seeing what goes on inside
-
-Click **Backend view**, or open http://127.0.0.1:8770/backend, and keep it beside the chat. You will see:
-
-- **The memory network.** Each dot is a memory. Blue dots are your own words and green dots are hunches.
-- **Lines between dots** show why two memories are related: shared words, similar meaning, close in time, or a stored link. A thicker line is a path that has proved useful.
-- **Glow** shows activation spreading. **White rings** mark the two memories being compared. **Amber rings** mark what the main model is reading.
-- **The five steps** of the subconscious, lit up as they happen.
-- **The thought stream**, a record of every thought and how it ended.
-
-### Things to try
-
-| Say this | Then | You should see |
-|---|---|---|
-| "My brother Ravi lives in Pune and works as a vet." | Click New chat, ask "What does my brother do?" | It remembers. |
-| "My tooth has been hurting badly." | New chat, ask "Anything medical I should deal with?" | It connects them by meaning, with no shared words. |
-| "We are adopting a puppy next week." then "Our landlord does not allow pets." | Stop typing for a minute or two | A hunch forms, and it may warn you unprompted. |
-| "I have a job interview tomorrow at 10am." | Look at Reminders coming up | A reminder is scheduled. |
-| (Nothing about a dog) | Ask "What's my dog's name?" | It should say you never told it. |
+Open http://127.0.0.1:8770 in your browser. For a live view of its thinking, open http://127.0.0.1:8770/backend beside it.
 
 ---
 
 ## How it works
 
 ```text
- You ──> CONSCIOUS (larger model, on the API) ──> reply
-            │ saves your words      ▲ reads hunches
-            ▼                       │
-         SHARED MEMORY  (your words + hunches)
-            │ finds a pair          ▲ stores a checked link
-            ▼                       │
-         IDLE ALGORITHM ──> SUBCONSCIOUS (small model, on your computer)
-         (no AI, free)
+ You ──────► LARGE MODEL ──────► reply
+              ▲    (only answers)  │
+              │                    │ your words + its reply
+     reads    │                    ▼
+   what's     │             SMALL MODEL DIGESTS
+   ready      │             notes + unsolved problems
+              │                    │
+              │                    ▼
+         ┌────┴─────────  MEMORY  ◄──────────────┐
+         │                    │                  │ conclusion
+         │                    ▼                  │
+         │        INCUBATION (while you're away) │
+         │        pick a problem or something    │
+         │        maths: what comes to mind?     │
+         │        small model: next thought ─────┘
+         │        repeat, or try a new angle
+         │
+         └── something looks solved → large model checks it → tells you
 ```
 
-### When you send a message
+### 1. Digest
 
-The main model looks up related memories, reads any new hunches and replies. Your message is saved in your exact words. It is never summarised or rewritten, because research found that heavy summarising makes memory much worse.
+After each exchange, the small model reads **both your message and the large model's reply**. It pulls out clear notes, and anything you are stuck on becomes an **unsolved problem**.
 
-### After you stop typing
+### 2. Incubate
 
-About 3 seconds after the reply, this loop begins:
+Whenever you are not typing, it starts a **chain of thought**:
 
-1. **Pick a memory.** It starts with things left unresolved, then recent things, then things it has not revisited much.
-2. **Spread outward.** Activation flows from that memory to related ones, fading as it goes, so it can reach something only indirectly connected.
-3. **Choose a partner.** It takes the most strongly activated memory it has not already tried.
-4. **Ask the small model:** "Do these two connect in a way that neither says alone?"
-5. **Check.** The small model checks its own answer.
-6. **Store it** as a hunch if it passes.
+1. **Pick what to work on.** Two out of three chains go to unsolved problems. The rest go to things you have learned, asking "does this connect to anything?"
+2. **What comes to mind.** Maths finds related memories. Sometimes an unrelated memory is added on purpose, like a distraction, because that is where new angles come from.
+3. **Think one step further.** The small model sees the goal, its train of thought so far, and what came to mind, then writes its next thought.
+4. **Keep going, or stop.** It continues for up to 5 steps, until it reaches a conclusion or a dead end.
+5. **Remember what failed, then let go.** A dead end is noted so the next attempt differs. After three failures the problem sleeps for a couple of minutes and those attempts are forgotten, so it returns with a clean slate, the way a break helps you.
 
-Steps 1 to 3 are plain maths, with no AI involved. When every pair has been tried, it goes round again and reaches further. All of this runs on your computer, so it uses no API quota.
+**New information wakes things up.** Anything new that relates to an open problem sends it straight to the front of the queue, even if it was asleep, with that new thing guaranteed to come to mind.
 
-### How it decides two memories are related
+**It reads a little.** Every few chains it fetches one short Wikipedia summary: usually on an open problem, sometimes completely at random. Only about three keywords leave your computer. Reading is treated purely as material to think about, fades after a few chains unless it led to a conclusion, and is never shown to the large model as fact.
 
-It scores each pair four ways and uses whichever is strongest:
+Only conclusions enter memory. The scratch work disappears. Then it starts another chain, again and again, for free on your computer.
 
-| Reason | In simple words |
-|---|---|
-| **Shared words** | Both mention a rare word such as "Friday" or "dentist". Each memory becomes a list of word scores, and rarer words count more. |
-| **Similar meaning** | A small embedding model turns each sentence into numbers based on meaning, so "tooth" and "dentist" land close together. |
-| **Close in time** | Things you said around the same time get a weak link that fades over time. |
-| **Stored link** | A hunch is firmly connected to the two memories it came from. |
+### 3. Telling you
 
-Paths the main model has actually used get up to twice as strong, so the subconscious learns what helps.
+When it believes it has solved a problem, or noticed something urgent, the large model checks the reasoning. That is the only time the large model is used between messages. If the conclusion holds up, it appears in your chat without being asked. If not, it is deleted and the problem reopens with a note about what went wrong.
 
-### How activation spreads
+Any other conclusion just waits in memory. When a later message relates to it, the large model sees it marked as uncertain, and either uses it or discards it as part of answering.
 
-The starting memory gets 1.0. Each link passes on:
+### The maths
+
+Two memories count as related if they share rare words, or if a small embedding model finds they mean similar things, or if one was concluded from the other. Starting from one memory, activation spreads along those links and fades at each step, so it can reach things only indirectly related:
 
 ```text
 0.5 × sender's activation × (this link's strength ÷ total strength of the sender's links)
 ```
 
-The 0.5 makes it fade at each step. The division shares it out, so a memory linked to everything cannot dominate.
+### Keeping memory lean
 
-### How it speaks first
+Conclusions weaken with every reply unless they are used, and are dropped after about 16 unused replies. Only the 40 strongest are kept. A note or conclusion that means the same as an existing one never enters.
 
-- **Reminders.** When you mention an upcoming event, the main model schedules a heads-up: a few hours before for something today, otherwise the evening before.
-- **Speaking up.** Small models sometimes invent details, so the main model checks new hunches against your own words, at most every 3 minutes. Invented ones are deleted, and anything worth raising appears in the chat, labelled "Brought up on its own".
+---
 
-After two messages you have not answered, it stays quiet until you reply. This stops an idle night from using up your API quota.
+## On the page
 
-### Keeping memory healthy
-
-A hunch the main model uses gets stronger. One that goes unused slowly fades as the conversation continues, and is eventually deleted. Your own words never fade.
+| Control | What it does |
+|---|---|
+| **Conscious switch** | Turns the large model off, so you can watch the small model solve things alone. Nothing is sent to the API, and its conclusions appear marked as unchecked. Switching it back on makes the large model check everything that happened while it was off. |
+| **Think dropdown** | How long it thinks after you stop: until your next message, or 5, 15 or 60 minutes. |
+| **Still working on** | The problems it is incubating. |
+| **Worked out while idle** | Its conclusions so far. |
+| **New chat / Clear chat** | A blank conversation, or empty this one. Long-term memory is kept. |
+| **Backend view** | Watch the current train of thought and the memory network live. It also has **Clear memory**, which permanently forgets all memories, conclusions and problems. |
 
 ---
 
 ## Limits
 
-- Whether this makes the assistant more useful has not been measured yet.
-- It only talks in the chat. It cannot send phone or desktop notifications or take actions.
-- Reminders only fire while the app is running. Missed ones appear the next time you start it.
-- Old memories are never overwritten, so if a plan changes, it sees both versions and has to work out which is current.
-- Background thinking keeps your CPU busy. Use the switch or the dropdown to limit it.
-- Your conversations and memories are saved to `stillair_memory.json` on your computer. What you type is also sent to Groq so the main model can answer.
+- Its ideas are only as good as a small model running on a CPU. It can reach wrong conclusions, which is why the large model checks them, and it will struggle with hard problems.
+- A chain takes about a minute on a laptop CPU, and thinking keeps the CPU busy. Use the dropdown to limit it.
+- It has not been measured against a version without incubation, so how much it helps is not yet known.
+- It only talks in the chat, and takes no other actions.
+- Your conversations and memories are saved to `stillair_memory.json` on your computer. What you type is also sent to Groq so the large model can answer.
 
 ---
 
 ## Settings
 
-Put these in `.env` if you want to change anything.
+Put these in `.env` to change anything.
 
 | Setting | What it changes | Default |
 |---|---|---|
-| `STILLAIR_API_KEY` | Your API key (required) | none |
-| `STILLAIR_MAIN_MODEL` | The conscious model | `openai/gpt-oss-120b` |
-| `STILLAIR_SMALL_MODEL` | The subconscious model | `phi4-mini` |
+| `STILLAIR_API_KEY` | Your API key (required for Groq) | none |
+| `STILLAIR_MAIN_MODEL` | The large model | `openai/gpt-oss-120b` |
+| `STILLAIR_SMALL_MODEL` | The small model | `phi4-mini` |
 | `STILLAIR_EMBED_MODEL` | The meaning model | `all-minilm` |
-| `STILLAIR_BASE_URL` | Any OpenAI-compatible API for the main model | Groq |
+| `STILLAIR_BASE_URL` | Any OpenAI-compatible API for the large model | Groq |
 | `STILLAIR_LOCAL_URL` | Where Ollama is running | `http://127.0.0.1:11434/v1` |
-| `STILLAIR_RPM`, `STILLAIR_TPM` | Requests and tokens per minute | 25, 6000 |
 
 ---
 
-## The research behind it
-
-Before the chat assistant, this project tested the idea in a controlled simulation. A simulated model stands in for a real one, with error rates we set ourselves. The worlds are made of invented facts, split so that answering needs two facts learned at different times. These numbers test the mechanism, and say nothing about how real models behave.
-
-```bash
-python -m stillair demo --fast          # narrated run in the terminal
-python -m stillair serve                # the original simulation dashboard
-python -m stillair eval --seeds 20      # the full experiment, about 2 minutes
-python -m unittest discover -s tests    # all tests
-```
-
-Three setups were compared, using the same amount of thinking for B and C, over 20 random worlds:
-
-| | A: no idle thinking | B: random thinking, no filter | C: Still Air |
-|---|---|---|---|
-| Accuracy with 1 lookup | 0% | 40% | **51%** |
-| Accuracy with 2 lookups | **100%** | 83% | 92% |
-| Stored links that are true | n/a | 7% | **73%** |
-
-**What this showed:**
-
-- Idle thinking lets the agent answer questions it otherwise could not, when it only gets one lookup.
-- The filter is essential. Without it, 93% of stored links were junk.
-- With two lookups, no idle thinking is still best, because a few false links get through.
-- Extra upgrades closed that gap in the simulator. On 20 fresh worlds, checking a link before using it, skipping pointless thinking, adaptive noise and expiring unconfirmed links together reached 100% with two lookups and 60% with one, with 93% of stored links true. Checking does cost more per question (85 tokens against 70), and the simulator's checker is more forgiving than a real one would be.
-
-Full tables and charts are in [`results/`](results/results.md).
-
-**Papers that shaped the design:**
+## Research behind it
 
 - [Sleep-time Compute](https://arxiv.org/abs/2504.13171): thinking ahead while idle.
 - [Synapse](https://arxiv.org/abs/2601.02744): spreading activation over memory.
-- [Hippo](https://arxiv.org/abs/2610.24453): replaying surprises, and adding or deleting memories explicitly.
-- [Human-Inspired Memory Architecture](https://arxiv.org/html/2605.08538v1): deduplicate memories, do not summarise them.
-- [LightMem](https://arxiv.org/abs/2604.07798): pairing small models with a larger one.
+- [Hippo](https://arxiv.org/abs/2610.24453): learning from what failed.
 - [HaluMem](https://arxiv.org/abs/2511.03506): false memories start at the moment of writing.
+
+The original simulation experiment for this project is preserved in the git history at commit `66fe977`.
 
 ---
 
@@ -217,15 +158,14 @@ Full tables and charts are in [`results/`](results/results.md).
 
 ```text
 stillair/
-  assistant/    the chat assistant: conscious, subconscious, memory links, reminders, server
-  core/         memory, spreading activation, the original idle loop, task-mode agent
-  backends/     connections to models: simulator, OpenAI-compatible APIs, Claude
-  world/        the invented facts used by the experiment
-  evaluation/   the experiment and its reports
-  live/         the original simulation dashboard
-  cli/          the commands you run
-web/            chat.html, backend.html, and the simulation dashboard (index.html)
-tests/          automated tests
-scripts/        makes the charts (needs matplotlib)
-results/        experiment results and charts
+  subconscious.py   digesting and incubating: the small model's work
+  conscious.py      answering and checking: the large model's work
+  links.py          the maths: how related memories are, spreading, search
+  memory.py         notes, problems and conclusions, and how they fade
+  session.py        runs the two together
+  state.py          chats and everything saved to disk
+  model.py          talks to Groq and Ollama
+  server.py         starts everything and serves the pages
+web/                chat.html and backend.html
+tests/              automated tests: python -m unittest discover -s tests
 ```

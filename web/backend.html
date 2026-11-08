@@ -48,6 +48,10 @@
   .badge.reinforce { background:color-mix(in srgb,var(--amber) 25%,transparent); color:var(--amber); }
   .badge.discard { background:color-mix(in srgb,var(--bad) 25%,transparent); color:var(--bad); }
   .err { color:var(--bad); font-size:13px; }
+  #clearmem { width:100%; background:transparent; color:var(--bad); border:1px solid var(--bad); border-radius:6px; padding:7px 12px; font:inherit; font-weight:600; cursor:pointer; }
+  #clearmem:hover:not(:disabled) { background:color-mix(in srgb,var(--bad) 15%,transparent); }
+  #clearmem:disabled { opacity:.5; cursor:default; }
+  #clearmem:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   @media (max-width: 900px) { main { grid-template-columns:minmax(0,1fr); grid-template-rows:55vh auto; } aside { border-left:0; border-top:1px solid var(--line); } }
 </style>
 </head>
@@ -63,32 +67,28 @@
     <div id="tip"></div>
     <div id="legend">
       <span><i style="background:var(--fact)"></i>your words</span>
-      <span><i style="background:var(--good)"></i>hunch</span>
-      <span><i style="background:var(--amber)"></i>unresolved</span>
+      <span><i style="background:var(--good)"></i>checked conclusion</span>
+      <span><i style="background:var(--good);opacity:.4"></i>unchecked conclusion</span>
+      <span><i style="background:var(--amber)"></i>unsolved problem</span>
+      <span><i style="background:var(--meaning)"></i>outside reading</span>
       <span><b style="background:var(--good)"></b>stored link</span>
       <span><b style="background:var(--meaning)"></b>meaning</span>
       <span><b style="background:var(--accent)"></b>words</span>
-      <span><b style="background:var(--mute)"></b>time</span>
       <span>white ring = being compared · glow = activation · amber ring = main model reading</span>
     </div>
   </div>
   <aside>
     <div id="err" class="err" role="alert"></div>
-    <h2>Subconscious, right now</h2>
-    <div class="step" id="s1">1 · Pick a memory (algorithm)</div>
-    <div class="step" id="s2">2 · Spread activation, choose a partner (algorithm)</div>
-    <div class="step" id="s3">3 · Ask the small model: do these connect?</div>
-    <div class="step" id="s4">4 · Small model checks its own answer</div>
-    <div class="step" id="s5">5 · Store it, or let it go</div>
-    <div id="pair"></div>
+    <button id="clearmem" type="button">Clear memory</button>
+    <h2>Train of thought, right now</h2>
+    <div id="train"></div>
     <h2>Conscious, last message</h2>
     <div id="main"></div>
     <h2>Totals</h2>
     <div class="stats">
       <div class="stat"><b id="n_mem">0</b><span>your memories</span></div>
-      <div class="stat"><b id="n_hun">0</b><span>hunches</span></div>
-      <div class="stat"><b id="n_tried">0</b><span>pairs this round</span></div>
-      <div class="stat"><b id="n_paths">0</b><span>paths learned</span></div>
+      <div class="stat"><b id="n_hun">0</b><span>connections (+ awaiting verdict)</span></div>
+      <div class="stat"><b id="n_tried">0</b><span>unsolved problems</span></div>
       <div class="stat"><b id="n_small">0</b><span>local tokens</span></div>
       <div class="stat"><b id="n_main">0</b><span>API tokens</span></div>
     </div>
@@ -103,7 +103,7 @@ let S = null, W = 0, H = 0;
 const pos = new Map(), born = new Map();
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
-const BADGE = {'hunch stored':['keep','HUNCH'], 'already known':['reinforce','KNOWN'], 'no connection':['discard','NO LINK'], 'rejected by its own check':['discard','REJECTED']};
+const BADGE = {'concluded':['keep','CONCLUDED'], 'thinking':['reinforce','THOUGHT'], 'already known':['reinforce','KNOWN'], 'dead end':['discard','DEAD END'], 'digested':['reinforce','DIGESTED'], 'read':['reinforce','READ'], 'let go':['discard','LET GO']};
 
 function resize() { const r = cv.parentElement.getBoundingClientRect(), d = devicePixelRatio || 1;
   W = r.width; H = r.height; cv.width = W * d; cv.height = H * d; ctx.setTransform(d,0,0,d,0,0); }
@@ -111,25 +111,28 @@ addEventListener('resize', resize); resize();
 
 function render() {
   const sub = S.sub, main = S.main, nodes = S.nodes;
-  $('models').textContent = `conscious: ${S.main_model} (API) · subconscious: ${S.small_model} (local) · meaning search ${S.meaning_search ? 'on' : 'off'}`;
+  $('models').textContent = `conscious: ${S.conscious ? S.main_model + ' (API)' : 'off'} · subconscious: ${S.small_model} (local) · meaning search ${S.meaning_search ? 'on' : 'off'}`;
   const talking = S.responding || main.phase === 'reviewing';
-  $('mode').textContent = talking ? 'CONSCIOUS WORKING' : !S.enabled ? 'SUBCONSCIOUS OFF' : S.status === 'thinking' ? 'SUBCONSCIOUS THINKING' : 'WAITING';
-  $('mode').className = 'pill ' + (talking ? 'main' : S.enabled ? '' : 'off');
+  $('mode').textContent = talking ? 'CONSCIOUS WORKING' : S.status === 'thinking' ? 'SUBCONSCIOUS THINKING' : 'WAITING';
+  $('mode').className = 'pill ' + (talking ? 'main' : '');
   $('err').textContent = S.error || '';
-  const stepOn = {asking:3, checking:4, done:5}[sub.phase];
-  for (let i = 1; i <= 5; i++) $('s' + i).className = 'step' + (i === stepOn ? ' on' : '');
   const byId = new Map(nodes.map(n => [n.id, n]));
-  const textOf = id => (byId.get(id) || {text:'(forgotten)'}).text;
-  $('pair').innerHTML = sub.a ? `<div class="box"><small>Comparing</small>${esc(textOf(sub.a))}<br><b>+</b> ${esc(textOf(sub.b))}${sub.link ? `<br><small>Proposed link</small>${esc(sub.link)}` : ''}${sub.outcome ? `<small>Result: ${esc(sub.outcome)}</small>` : ''}</div>` : '';
-  const verb = main.phase === 'replying' ? 'Answering now' : main.phase === 'reviewing' ? 'Reviewing hunches now' : 'Last message';
-  $('main').innerHTML = main.text ? `<div class="box"><small>${verb}</small>${esc(main.text)}<small>Read ${main.ids.length} related memor${main.ids.length === 1 ? 'y' : 'ies'}${main.used ? `, relied on ${main.used.length}` : ''}</small></div>` : '<div class="sub">Nothing yet. Send a message in the chat.</div>';
+  const steps = (sub.steps || []).map((t, i) => `<div class="step on">${i + 1} · ${esc(t)}</div>`).join('');
+  const came = (sub.shown || []).filter(i => byId.has(i)).map(i => esc(byId.get(i).text)).join('<br>');
+  const label = {thinking:'Thinking about', digesting:'Reading what was said', reading:'Reading', done:'Just finished'}[sub.phase];
+  $('train').innerHTML = sub.goal ? `<div class="box"><small>${label || ''}</small>${esc(sub.goal)}${sub.outcome ? `<small>Result: ${esc(sub.outcome)}</small>` : ''}</div>${steps}${came ? `<div class="box"><small>Came to mind</small>${came}</div>` : ''}` : '<div class="sub">Resting.</div>';
+  $('clearmem').disabled = S.responding;
+  const verb = {searching:'Searching memory', replying:'Answering now', reviewing:'Reviewing hunches now'}[main.phase] || 'Last message';
+  const search = main.searched === undefined ? '' : `Search found ${main.searched}; passed on the ${main.ids.length} most relevant`;
+  $('main').innerHTML = main.text ? `<div class="box"><small>${verb}</small>${esc(main.text)}<small>${search}${main.used ? `; the main model relied on ${main.used.length}` : ''}</small></div>` : '<div class="sub">Nothing yet. Send a message in the chat.</div>';
   $('n_mem').textContent = nodes.filter(n => n.kind === 'fact').length;
-  $('n_hun').textContent = nodes.filter(n => n.kind === 'connection').length;
-  $('n_tried').textContent = S.pairs_tried; $('n_paths').textContent = S.paths_learned;
+  const connections = nodes.filter(n => n.kind === 'connection'), confirmed = connections.filter(n => n.confirmed).length;
+  $('n_hun').textContent = confirmed + (connections.length > confirmed ? ` +${connections.length - confirmed}` : '');
+  $('n_tried').textContent = S.open_problems;
   $('n_small').textContent = S.small_tokens; $('n_main').textContent = S.main_tokens;
   const el = $('stream');
   el.innerHTML = S.thoughts.slice().reverse().map(t => { const [c, label] = BADGE[t.outcome] || ['discard', t.outcome];
-    return `<div class="ev"><span class="badge ${c}">${label}</span>${esc(t.a)} <b>+</b> ${esc(t.b)}${t.link ? '<br>→ ' + esc(t.link) : ''}</div>`; }).join('') || '<div class="ev sub">No thoughts yet.</div>';
+    return `<div class="ev"><span class="badge ${c}">${label}</span>${esc(t.a)}${t.b ? ' <b>+</b> ' + esc(t.b) : ''}${t.link ? '<br>→ ' + esc(t.link) : ''}</div>`; }).join('') || '<div class="ev sub">No thoughts yet.</div>';
   for (const n of nodes) if (!pos.has(n.id)) {
     const ps = n.parents.map(p => pos.get(p)).filter(Boolean);
     const cx = ps.length ? ps.reduce((a,p) => a + p.x, 0) / ps.length : W/2 + (Math.random()-.5)*W*.7;
@@ -159,22 +162,21 @@ function tick() {
 }
 function draw() {
   ctx.clearRect(0, 0, W, H);
-  const color = {link:css('--good'), meaning:css('--meaning'), words:css('--accent'), time:css('--mute')};
+  const color = {link:css('--good'), meaning:css('--meaning'), words:css('--accent')};
   const fact = css('--fact'), good = css('--good'), amber = css('--amber'), ring = css('--ring');
   for (const l of S.links) { const a = pos.get(l.a), b = pos.get(l.b); if (!a || !b) continue;
-    ctx.strokeStyle = color[l.kind]; ctx.globalAlpha = .3 + Math.min(.6, l.strength); ctx.lineWidth = 1 + 3 * l.learned;
-    ctx.setLineDash(l.kind === 'time' ? [2, 4] : []); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-  ctx.setLineDash([]); ctx.globalAlpha = 1;
-  const sub = S.sub, thinking = sub.a && (sub.phase === 'asking' || sub.phase === 'checking'), active = sub.activation || {}, reading = new Set(S.main.ids || []), now = performance.now();
+    ctx.strokeStyle = color[l.kind]; ctx.globalAlpha = .3 + Math.min(.6, l.strength); ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  ctx.globalAlpha = 1;
+  const sub = S.sub, thinking = sub.phase === 'thinking', active = sub.activation || {}, comparing = new Set([sub.focus, ...(sub.shown || [])]), reading = new Set(S.main.ids || []), now = performance.now();
   for (const n of S.nodes) { const p = pos.get(n.id); if (!p) continue;
     const r = n.kind === 'connection' ? 5 + n.strength * 2 : 6 + Math.min(4, (n.strength - 1) * 3);
-    const col = n.kind === 'connection' ? good : fact;
+    const col = n.kind === 'connection' ? good : n.kind === 'reading' ? css('--meaning') : fact;
     const level = thinking ? (active[n.id] || 0) : 0;
     if (level) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 8 + 22 * level, 0, 7); ctx.fillStyle = css('--accent'); ctx.globalAlpha = .12 + .4 * level; ctx.fill(); ctx.globalAlpha = 1; }
     const age = now - (born.get(n.id) || 0);
     if (age < 1600) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 14 * (1 - age / 1600), 0, 7); ctx.strokeStyle = col; ctx.globalAlpha = 1 - age / 1600; ctx.lineWidth = 1.5; ctx.stroke(); ctx.globalAlpha = 1; }
-    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fillStyle = n.open ? amber : col; ctx.fill();
-    if (thinking && (n.id === sub.a || n.id === sub.b)) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 4, 0, 7); ctx.strokeStyle = ring; ctx.lineWidth = 2; ctx.stroke(); }
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fillStyle = n.kind === 'problem' ? amber : col; ctx.globalAlpha = n.kind === 'connection' && !n.confirmed ? .4 : 1; ctx.fill(); ctx.globalAlpha = 1;
+    if (thinking && comparing.has(n.id)) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 4, 0, 7); ctx.strokeStyle = ring; ctx.lineWidth = 2; ctx.stroke(); }
     if (S.main.phase !== 'idle' && reading.has(n.id)) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 7, 0, 7); ctx.strokeStyle = amber; ctx.lineWidth = 2; ctx.stroke(); }
   }
 }
@@ -183,9 +185,13 @@ cv.addEventListener('mousemove', e => {
   for (const n of S.nodes) { const p = pos.get(n.id); if (!p) continue; const d = (p.x-x)**2 + (p.y-y)**2; if (d < bd) { bd = d; best = n; } }
   const tip = $('tip'); if (!best) { tip.style.display = 'none'; return; }
   tip.style.display = 'block'; tip.style.left = Math.min(x + 12, W - 330) + 'px'; tip.style.top = (y + 12) + 'px';
-  tip.innerHTML = `<b>${best.kind === 'connection' ? 'hunch' : 'memory'}</b> · strength ${best.strength} · used ${best.used} · picked ${best.visits} times${best.open ? ' · unresolved' : ''}<br>${esc(best.text)}`;
+  tip.innerHTML = `<b>${best.kind === 'connection' ? (best.confirmed ? 'checked conclusion' : 'unchecked conclusion') : best.kind === 'problem' ? 'problem' : best.kind === 'reading' ? 'outside reading' : 'memory'}</b> · strength ${best.strength} · used ${best.used} · picked ${best.visits} times${best.status ? ' · ' + esc(best.status) : ''}<br>${esc(best.text)}`;
 });
 cv.addEventListener('mouseleave', () => $('tip').style.display = 'none');
+$('clearmem').onclick = async () => {
+  if (!confirm('Permanently forget all memories, conclusions and unsolved problems? This cannot be undone. Chat transcripts are kept.')) return;
+  await fetch('/api/memory/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); pos.clear(); born.clear(); refresh();
+};
 refresh(); setInterval(refresh, 1000); requestAnimationFrame(tick);
 </script>
 </body>
