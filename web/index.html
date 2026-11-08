@@ -71,7 +71,7 @@
 </head>
 <body>
 <header>
-  <h1>STILL AIR</h1><span class="sub">an idle loop for self-initiated AI thought · simulated associator · thought-only</span>
+  <h1>STILL AIR</h1><span class="sub">an idle loop for self-initiated AI thought · <span id="backend">simulated associator</span> · thought-only</span>
   <span class="spacer"></span>
   <span id="mode" class="pill idle">IDLE</span>
   <button id="theme" title="Toggle light/dark" aria-label="Toggle light or dark theme">◐</button>
@@ -90,6 +90,7 @@
     </div>
   </div>
   <aside>
+    <div id="err" class="note no" role="alert" style="display:none;margin:0 0 10px"></div>
     <h2>1 · Teach (sessions arrive over time)</h2>
     <div class="row">
       <button id="feed" class="primary">Teach next session</button>
@@ -117,6 +118,7 @@
       <div class="stat"><b id="s_rein">0</b><span>reinforced</span></div>
       <div class="stat"><b id="s_disc">0</b><span>discarded</span></div>
     </div>
+    <div id="quota" class="note" style="display:none"></div>
     <div class="row" style="margin-top:10px"><label>curiosity</label><div class="bar" style="flex:1"><div id="b_cur"></div></div></div>
     <div class="row"><label>uncertainty</label><div class="bar" style="flex:1"><div id="b_unc"></div></div></div>
     <div class="row"><label id="l_prec">memory precision</label><div class="bar" style="flex:1"><div id="b_prec" style="background:var(--good)"></div></div><span class="val" id="v_prec"></span></div>
@@ -161,7 +163,11 @@ function buildLatent() {
 }
 
 function render() {
-  const c = S.config;
+  const c = S.config, real = S.backend !== 'sim';
+  $('backend').textContent = real ? 'real model: ' + S.model : 'simulated associator';
+  $('err').style.display = S.error ? '' : 'none'; $('err').textContent = S.error || '';
+  $('quota').style.display = real ? '' : 'none'; $('quota').textContent = `model tokens used: ${S.tokens_used.toLocaleString()} of ${S.token_budget.toLocaleString()}`;
+  for (const id of ['hal', 'vm']) $(id).closest('.row').style.display = real ? 'none' : '';
   $('mode').textContent = S.mode.toUpperCase() + (S.mode === 'idle' && !S.running ? ' (paused)' : '');
   $('mode').className = 'pill ' + S.mode;
   $('run').textContent = S.running ? '❚❚ Pause idle loop' : '▶ Start idle loop';
@@ -208,16 +214,17 @@ function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&l
 function renderAnswer() {
   const a = S.last_answer; if (!a) { $('answer').innerHTML = ''; return; }
   const card = (t, x) => {
-    const mark = a.truth == null ? '' : (x.answer === a.truth ? '<span class="ok"> ✓ correct</span>' : x.answer == null ? '<span class="no"> ✗ unknown</span>' : '<span class="no"> ✗ wrong</span>');
+    const mark = a.truth == null ? '' : (x.correct ? '<span class="ok"> ✓ correct</span>' : x.answer == null ? '<span class="no"> ✗ unknown</span>' : '<span class="no"> ✗ wrong</span>');
     return `<div class="card"><h3>${t}</h3><div class="a">${x.answer == null ? '<i>I do not know</i>' : esc(x.answer)}${mark}</div><div class="note">${x.hops} hop · ${x.tokens} tokens</div></div>`; };
   $('answer').innerHTML = `<div class="note">Q: ${esc(a.question)}</div><div class="cards">${card('Without idle thinking', a.baseline)}${card('With Still Air memory', a.still_air)}</div>` +
-    (a.still_air.answer == null ? '<div class="note">Not answerable yet → stored as an open question (amber). The idle loop will treat it as a drive.</div>' : '') +
+    (a.understood === false ? '<div class="note">The simulated model only understands the suggested question templates, so this was not stored.</div>' :
+     a.still_air.answer == null ? '<div class="note">Not answerable yet → stored as an open question (amber). The idle loop will treat it as a drive.</div>' : '') +
     (a.truth != null ? `<div class="note">Expected: ${esc(a.truth)}</div>` : '');
 }
 
 // ---- force layout + drawing ----
 function tick() {
-  if (!S) return;
+  if (!S) { requestAnimationFrame(tick); return; }
   const ns = S.nodes, byId = new Map(ns.map(n => [n.id, n]));
   const ps = ns.map(n => pos.get(n.id)).filter(Boolean);
   for (let i = 0; i < ns.length; i++) { const a = pos.get(ns[i].id); if (!a) continue;
@@ -274,7 +281,8 @@ let deb = {}; for (const [id, key] of [['amp','amplitude'],['rate','rate'],['hal
 $('sel').onchange = () => api('config', {selector: $('sel').checked}).then(refresh);
 $('wr').onchange = () => api('config', {writes: $('wr').checked}).then(refresh);
 $('gt').onchange = () => { showGT = $('gt').checked; if (S) render(); };
-$('ask').onclick = async () => { const q = $('q').value.trim(); if (!q) return; await api('ask', {question: q}); refresh(); };
+$('ask').onclick = async () => { const q = $('q').value.trim(), b = $('ask'), label = b.textContent; if (!q || b.disabled) return;
+  b.disabled = true; b.textContent = 'Thinking…'; try { await api('ask', {question: q}); } finally { b.disabled = false; b.textContent = label; refresh(); } };
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') $('ask').click(); });
 $('theme').onclick = () => { const r = document.documentElement, dark = getComputedStyle(r).getPropertyValue('--bg').trim() === '#0e1116';
   r.setAttribute('data-theme', dark ? 'light' : 'dark'); };

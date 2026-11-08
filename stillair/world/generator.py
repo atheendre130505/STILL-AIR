@@ -93,6 +93,13 @@ def generate(
     n_dangling_prop: int = 12,
     n_controls: int = 12,
 ) -> World:
+    capacity = sum(len(s.props) for s in SCHEMAS.values())
+    if n_chains + n_dangling_prop > capacity:  # each property is used once, so answers stay unique
+        raise ValueError(f"n_chains + n_dangling_prop must be at most {capacity}, got {n_chains + n_dangling_prop}")
+    if n_sessions < 2:
+        raise ValueError("n_sessions must be at least 2: a chain's two facts arrive in different sessions")
+    if n_dangling_prop and not n_chains:
+        raise ValueError("near-name decoys need at least one chain to imitate")
     rng = random.Random(seed)
     taken: set = set()
     schemas = list(SCHEMAS.values())

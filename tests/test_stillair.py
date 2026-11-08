@@ -8,14 +8,16 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from stillair import evaluate as E
-from stillair import world as W
-from stillair.agent import Agent
-from stillair.llm import SimLLM, Thought
-from stillair.loop import build_loop
-from stillair.memory import Memory
-from stillair.schemas import SCHEMAS, parse_fact, parse_question
-from stillair.selector import Selector
+from stillair.evaluation import episode as E
+from stillair.evaluation.experiments import summarize
+from stillair.world import generator as W
+from stillair.core.agent import Agent
+from stillair.backends.base import Thought
+from stillair.backends.sim import SimLLM
+from stillair.core.factory import build_loop
+from stillair.core.memory import Memory
+from stillair.world.schemas import SCHEMAS, parse_fact, parse_question
+from stillair.core.selector import Selector
 
 
 def loaded(seed=1, **kw):
@@ -248,7 +250,7 @@ class TestEvaluate(unittest.TestCase):
 
     def test_summarize_shape(self):
         by = {"A": [E.run_episode(0, "A"), E.run_episode(1, "A")]}
-        s = E.summarize(by)
+        s = summarize(by)
         self.assertIn("H1k3.acc", s["A"])
 
 
@@ -266,7 +268,7 @@ class TestClaudeBackendWithFakeClient(unittest.TestCase):
         return SimpleNamespace(messages=Msgs()), calls
 
     def test_extract_associate_judge_answer(self):
-        from stillair.claude_backend import ClaudeLLM
+        from stillair.backends.claude import ClaudeLLM
 
         client, calls = self.fake([
             {"has_triple": True, "subject": "Kelmer", "relation": "built_from", "object": "Zorvian"},
@@ -288,7 +290,7 @@ class TestClaudeBackendWithFakeClient(unittest.TestCase):
         self.assertEqual(calls[0]["model"], "claude-opus-5-5")
 
     def test_refusal_becomes_empty_thought(self):
-        from stillair.claude_backend import ClaudeLLM
+        from stillair.backends.claude import ClaudeLLM
 
         class Msgs:
             def create(self, **kw):
@@ -302,7 +304,7 @@ class TestClaudeBackendWithFakeClient(unittest.TestCase):
 
 class TestLive(unittest.TestCase):
     def test_feed_ask_config_snapshot(self):
-        from stillair.live import LiveSession
+        from stillair.live.session import LiveSession
 
         s = LiveSession(0)
         for _ in range(4):

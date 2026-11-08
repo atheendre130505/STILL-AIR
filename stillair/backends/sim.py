@@ -10,55 +10,16 @@ sweeps rather than hides.
     verifier_miss      : how often the grounding judge is fooled (and, at half
                          that rate, wrongly rejects a valid thought)
 
-`ClaudeLLM` (claude_backend.py) implements the same interface against the real API.
+`ClaudeLLM` (claude.py) implements the same interface against the real API.
 """
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
-from typing import Optional
 
-from .memory import Node, ntok
-from .schemas import PROPERTY, SCHEMAS, parse_fact, parse_question
-
-
-@dataclass
-class Thought:
-    kind: str  # derive | analogy | restate | none
-    text: str
-    claim: Optional[tuple] = None
-    parents: list = field(default_factory=list)  # node ids
-    tokens: int = 0
-
-
-@dataclass
-class Answer:
-    text: Optional[str] = None
-    need: Optional[str] = None  # entity to look up next (a second hop)
-    via: list = field(default_factory=list)
-    tokens: int = 0
-
-
-class LLM:
-    name = "base"
-
-    def extract(self, text: str) -> Optional[tuple]:
-        raise NotImplementedError
-
-    def associate(self, seeds: list, nudge=None) -> Thought:
-        raise NotImplementedError
-
-    def followups(self, seeds: list) -> list:
-        """Memory lookups the model wants before thinking: 'what else do I know about X?'"""
-        return []
-
-    def judge(self, thought: Thought, parents: list):
-        """-> (validity in [0,1], tokens used)"""
-        raise NotImplementedError
-
-    def answer(self, question: str, context: list, scratch: dict) -> Answer:
-        raise NotImplementedError
+from ..core.memory import Node, ntok
+from ..world.schemas import PROPERTY, SCHEMAS, parse_fact, parse_question
+from .base import LLM, Answer, Thought
 
 
 def _common_prefix(a: str, b: str) -> int:

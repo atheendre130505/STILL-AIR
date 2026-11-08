@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Still Air Chat</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a323d; --text:#e6edf3; --mute:#8b97a6;
+    --accent:#7aa2f7; --good:#3fb97f; --amber:#e3a008; --bad:#e5534b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f4f6f9; --panel:#fff; --panel2:#eef1f5; --line:#d6dce4; --text:#1b2330; --mute:#667085;
+      --accent:#3b5bdb; --good:#1f9d63; --amber:#b57900; --bad:#cf3b33; }
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  main { height:100%; display:grid; grid-template-columns:minmax(0,1fr) 380px; }
+  #chat { display:flex; flex-direction:column; min-height:0; }
+  header { padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  h1 { font-size:16px; margin:0; letter-spacing:.04em; }
+  .sub { color:var(--mute); font-size:12px; }
+  #turns { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:74%; padding:9px 13px; border-radius:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .user { align-self:flex-end; background:var(--accent); color:#fff; }
+  .assistant { align-self:flex-start; background:var(--panel2); }
+  .titlebar { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  .titlebar h1 { flex:none; }
+  .titlebar select { flex:1; min-width:0; margin:0; }
+  .titlebar button { flex:none; padding:7px 12px; font-size:13px; }
+  #backendlink { flex:none; color:var(--accent); font-size:13px; }
+  .unprompted { border:1px solid var(--accent); }
+  .unprompted small { display:block; color:var(--accent); font-size:11px; font-weight:600; margin-bottom:3px; }
+  select { width:100%; margin-top:8px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit; font-size:13px; }
+  .empty { color:var(--mute); margin:auto; text-align:center; max-width:360px; }
+  form { display:flex; gap:8px; padding:12px 18px; border-top:1px solid var(--line); background:var(--panel); }
+  input[type=text] { flex:1; min-width:0; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:inherit; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 18px; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  aside { border-left:1px solid var(--line); background:var(--panel); padding:14px 16px; overflow-y:auto; min-height:0; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute); margin:18px 0 8px; }
+  h2:first-child { margin-top:0; }
+  .toggle { display:flex; align-items:center; justify-content:space-between; gap:10px; font-weight:600; }
+  .switch { position:relative; width:46px; height:26px; flex:none; }
+  .switch input { position:absolute; inset:0; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+  .track { position:absolute; inset:0; background:var(--line); border-radius:13px; pointer-events:none; transition:background .15s; }
+  .track::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; background:#fff; border-radius:50%; transition:transform .15s; }
+  .switch input:checked + .track { background:var(--good); }
+  .switch input:checked + .track::after { transform:translateX(20px); }
+  .switch input:focus-visible + .track { outline:2px solid var(--accent); outline-offset:2px; }
+  #status { color:var(--mute); font-size:13px; margin-top:4px; }
+  #err { color:var(--bad); font-size:13px; margin-top:8px; overflow-wrap:anywhere; }
+  .stats { color:var(--mute); font-size:13px; }
+  .card { background:var(--panel2); border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:13px; overflow-wrap:anywhere; }
+  .card small { color:var(--mute); display:block; margin-top:3px; }
+  .ok { color:var(--good); } .no { color:var(--mute); } .warn { color:var(--amber); }
+  @media (max-width: 800px) { main { grid-template-columns:minmax(0,1fr); grid-template-rows:62vh auto; height:auto; } aside { border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<main>
+  <section id="chat">
+    <header>
+      <div class="titlebar">
+        <h1>STILL AIR</h1>
+        <select id="chats" aria-label="Open a chat"></select>
+        <button id="newchat" type="button">New chat</button>
+        <a id="backendlink" href="/backend" target="_blank" rel="noopener">Backend view</a>
+      </div>
+      <div class="sub" id="models"></div>
+    </header>
+    <div id="turns" aria-live="polite"></div>
+    <form id="form">
+      <input id="text" type="text" autocomplete="off" placeholder="Tell it something, or ask something" aria-label="Your message">
+      <button id="send">Send</button>
+    </form>
+  </section>
+  <aside>
+    <div class="toggle">
+      <label for="sub">Subconscious</label>
+      <span class="switch"><input id="sub" type="checkbox"><span class="track"></span></span>
+    </div>
+    <select id="limit" aria-label="How long the subconscious thinks after you stop">
+      <option value="">Think until I send a message</option>
+      <option value="5">Think for 5 minutes</option>
+      <option value="15">Think for 15 minutes</option>
+      <option value="60">Think for 1 hour</option>
+    </select>
+    <div id="status"></div>
+    <div id="err" role="alert"></div>
+    <h2>Reminders coming up</h2>
+    <div id="reminders"></div>
+    <h2>Memory</h2>
+    <div class="stats" id="stats"></div>
+    <h2>Hunches it formed</h2>
+    <div id="hunches"></div>
+    <h2>What it is thinking about</h2>
+    <div id="thoughts"></div>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let S = null, waiting = false, pendingText = null;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+const post = (path, body) => fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+const CLS = {'hunch stored':'ok', 'already known':'no', 'no connection':'no', 'rejected by its own check':'warn'};
+
+function renderTurns() {
+  const box = $('turns'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  const items = S.turns.map(t => `<div class="msg ${t.role === 'user' ? 'user' : 'assistant'}${t.unprompted ? ' unprompted' : ''}">${t.unprompted ? '<small>Brought up on its own</small>' : ''}${esc(t.text)}</div>`);
+  if (pendingText !== null) items.push(`<div class="msg user">${esc(pendingText)}</div><div class="msg assistant">Thinking…</div>`);
+  box.innerHTML = items.join('') || '<div class="empty">Tell it a few things about yourself, then stop typing and watch the panel on the right.</div>';
+  if (atEnd || waiting) box.scrollTop = box.scrollHeight;
+}
+function render() {
+  const chatKey = JSON.stringify(S.chats);
+  if ($('chats').dataset.key !== chatKey) {
+    $('chats').dataset.key = chatKey;
+    $('chats').innerHTML = S.chats.map(c => `<option value="${c.id}">${esc(c.title)}</option>`).join('');
+  }
+  if (document.activeElement !== $('chats')) $('chats').value = String(S.chat_id);
+  $('newchat').disabled = $('chats').disabled = waiting || S.responding;
+  $('models').textContent =`conscious: ${S.main_model} (API) · subconscious: ${S.small_model} (on this laptop)`;
+  if (document.activeElement !== $('sub')) $('sub').checked = S.enabled;
+  if (document.activeElement !== $('limit')) $('limit').value = S.limit_minutes === null ? '' : String(S.limit_minutes);
+  const left = S.status === 'thinking' && S.minutes_left !== null ? ` (about ${S.minutes_left} min left)` : '';
+  $('status').textContent = S.enabled ? (S.responding ? 'paused while you are talking' : S.status + left) : 'off';
+  $('reminders').innerHTML = S.reminders.map(r => `<div class="card">${esc(r.text)}<small>${esc(new Date(r.at * 1000).toLocaleString())}</small></div>`).join('') || '<div class="stats">None set.</div>';
+  $('err').textContent = S.error || '';
+  $('stats').textContent = `${S.memories} memories · ${S.hunches.length} hunches · ${S.pairs_tried} pairs considered · ${S.paths_learned} paths learned · meaning search ${S.meaning_search ? 'on' : 'off'}`;
+  $('hunches').innerHTML = S.hunches.slice().reverse().map(h => `<div class="card">${esc(h.text)}<small>used ${h.used} time${h.used === 1 ? '' : 's'}</small></div>`).join('') || '<div class="stats">None yet.</div>';
+  $('thoughts').innerHTML = S.thoughts.slice().reverse().slice(0, 15).map(t => `<div class="card">${esc(t.a)} <b>+</b> ${esc(t.b)}${t.link ? '<br>→ ' + esc(t.link) : ''}<small class="${CLS[t.outcome] || ''}">${esc(t.outcome)}</small></div>`).join('') || '<div class="stats">Nothing yet.</div>';
+  renderTurns();
+}
+async function refresh() { try { S = await (await fetch('/api/state')).json(); render(); } catch (e) {} }
+
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  const text = $('text').value.trim(); if (!text || waiting) return;
+  waiting = true; pendingText = text; $('text').value = ''; $('send').disabled = true; if (S) renderTurns();
+  try { await post('/api/say', {text}); } finally { waiting = false; pendingText = null; $('send').disabled = false; await refresh(); $('text').focus(); }
+};
+$('newchat').onclick = async () => { await post('/api/chat/new', {}); await refresh(); $('text').focus(); };
+$('chats').onchange = async () => { await post('/api/chat/open', {id: +$('chats').value}); $('chats').blur(); await refresh(); };
+$('sub').onchange = async () => { await post('/api/subconscious', {on: $('sub').checked}); refresh(); };
+$('limit').onchange = async () => { await post('/api/subconscious', {limit_minutes: $('limit').value === '' ? null : +$('limit').value}); refresh(); };
+refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

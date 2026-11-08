@@ -14,12 +14,11 @@ memory and takes no external action.
 from __future__ import annotations
 
 import json
-import random
 import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .llm import LLM
+from ..backends.base import LLM, Thought
 from .memory import Memory, ntok
 from .perturb import Perturbation
 from .selector import Selector
@@ -34,6 +33,20 @@ class LoopConfig:
     habituation: float = 0.12  # inhibition of return: boredom with recently visited memories
     visit_decay: float = 0.9
     max_followups: int = 1  # lookups the model may issue per step
+    skip_unlinked: bool = False  # no model call unless two seed facts share an entity
+    trial_expiry: int = 0  # steps an unconfirmed connection may survive; 0 = no expiry
+
+
+def seeds_share_entity(seeds: list) -> bool:
+    seen = set()
+    for n in seeds:
+        if n.kind != "fact" or not n.claim:
+            continue
+        entities = {n.claim[0], n.claim[2]}
+        if seen & entities:
+            return True
+        seen |= entities
+    return False
 
 
 class IdleLoop:
@@ -75,10 +88,12 @@ class IdleLoop:
                 for _, n in self.mem.retrieve(q, k=2):
                     if n not in seeds:
                         seeds.append(n)
-            thought = self.llm.associate(seeds, nudge)
+            skipped = self.cfg.skip_unlinked and not seeds_share_entity(seeds)
+            thought = Thought("none", "", None, [], 1) if skipped else self.llm.associate(seeds, nudge)
             dup = bool(thought.claim and self.mem.find_claim(thought.claim))
             dec = self.selector.evaluate(self.mem, thought)
-            toks = sum(ntok(s.text) for s in seeds) + thought.tokens + dec.judge_tokens
+            read = 0 if skipped or self.llm.usage_includes_input else sum(ntok(s.text) for s in seeds)
+            toks = read + thought.tokens + dec.judge_tokens
 
             wrote = None
             if dec.action == "keep" and self.cfg.write_memory and thought.kind != "none":
@@ -98,6 +113,8 @@ class IdleLoop:
             accepted = wrote is not None
             self.perturb.update(self.mem.vec(thought.text) if thought.text else {}, accepted)
             pruned = self.mem.decay_and_prune(self.cfg.decay, self.cfg.prune_floor)
+            if self.cfg.trial_expiry:
+                pruned += self.mem.expire_unconfirmed(self.step_no, self.cfg.trial_expiry)
             self.tokens += toks
 
             ev = {
@@ -121,7 +138,7 @@ class IdleLoop:
             }
             self.events.append(ev)
             if self.log_path:
-                with open(self.log_path, "a") as f:
+                with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(ev) + "\n")
             if self.on_event:
                 self.on_event(ev)
@@ -142,40 +159,3 @@ class IdleLoop:
             n += 1
         return self.tokens - start
 
-
-def build_loop(
-    memory: Memory,
-    seed: int = 0,
-    mode: str = "full",
-    amplitude: float = 0.5,
-    hallucination_rate: float = 0.3,
-    verifier_miss: float = 0.15,
-    llm: Optional[LLM] = None,
-    log_path: Optional[str] = None,
-    on_event: Optional[Callable] = None,
-) -> IdleLoop:
-    """Factory for the conditions / ablations used in the paper.
-
-    mode: full          - Still Air (condition C)
-          noise_only    - random noise, no selector (condition B)
-          no_selector   - full perturbation, accept everything (ablation)
-          no_writes     - full, but nothing is written to memory (ablation)
-          noise_selector- random noise, selector on (ablation)
-    """
-    from .llm import SimLLM
-
-    llm = llm or SimLLM(seed + 101, hallucination_rate, verifier_miss)
-    rng = random.Random(seed + 7)
-    if mode == "noise_only":
-        pert, sel, cfg = Perturbation(rng, 1.0, use_state=False), Selector(llm, enabled=False), LoopConfig()
-    elif mode == "no_selector":
-        pert, sel, cfg = Perturbation(rng, amplitude), Selector(llm, enabled=False), LoopConfig()
-    elif mode == "no_writes":
-        pert, sel, cfg = Perturbation(rng, amplitude), Selector(llm), LoopConfig(write_memory=False)
-    elif mode == "noise_selector":
-        pert, sel, cfg = Perturbation(rng, 1.0, use_state=False), Selector(llm), LoopConfig()
-    elif mode == "full":
-        pert, sel, cfg = Perturbation(rng, amplitude), Selector(llm), LoopConfig()
-    else:
-        raise ValueError(mode)
-    return IdleLoop(memory, llm, pert, sel, cfg, log_path, on_event)

@@ -17,7 +17,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RES = os.path.join(ROOT, "results")
 OUT = os.path.join(RES, "charts")
 os.makedirs(OUT, exist_ok=True)
-res = json.load(open(os.path.join(RES, "results.json")))
+with open(os.path.join(RES, "results.json"), encoding="utf-8") as f:
+    res = json.load(f)
 
 INK, MUTE, GRID = "#1b2330", "#667085", "#e3e7ec"
 BLUE, GREEN, RED, AMBER, GRAY = "#3b5bdb", "#1f9d63", "#cf3b33", "#b57900", "#98a2b3"

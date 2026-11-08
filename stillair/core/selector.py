@@ -10,7 +10,8 @@ and one of three outcomes:
 
     keep      valid and novel          -> written to memory as a new connection
     reinforce valid but already known  -> existing memory strengthened, nothing new written
-    discard   not valid                -> dropped (the "rest fade")
+    discard   not valid, or a repeat   -> dropped (the "rest fade")
+              with nothing to strengthen
 
 `enabled=False` is condition B / the no-selector ablation: everything is accepted.
 """
@@ -21,7 +22,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
-from .llm import LLM, Thought
+from ..backends.base import LLM, Thought
 from .memory import Memory, Node
 
 
@@ -44,11 +45,11 @@ class Selector:
         self.recent = deque(maxlen=recent)
 
     def novelty(self, mem: Memory, t: Thought) -> tuple:
-        if t.text in self.recent:
-            return 0.0, None
-        if t.claim:
+        if t.claim:  # a claim is known only if memory holds it; a recent repeat of an unstored claim is still new
             ex = mem.find_claim(t.claim)
             return (0.0, ex) if ex else (1.0, None)
+        if t.text in self.recent:
+            return 0.0, None
         return 1.0 - mem.max_similarity(t.text), None
 
     def evaluate(self, mem: Memory, t: Thought) -> Decision:
@@ -65,5 +66,7 @@ class Selector:
         if validity < self.validity_min:
             return Decision("discard", validity, nov, "failed grounding", jt)
         if nov < self.novelty_min:
+            if ex is None:  # a claimless near-repeat points at no memory, so there is nothing to strengthen
+                return Decision("discard", validity, nov, "repeats a recent thought", jt)
             return Decision("reinforce", validity, nov, "valid but already known", jt, ex)
         return Decision("keep", validity, nov, "valid and novel", jt)

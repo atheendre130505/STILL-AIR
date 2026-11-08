@@ -1,21 +1,16 @@
-"""Command line: `python3 -m stillair <demo|serve|eval|ask>`."""
+"""The narrated terminal demo (`python -m stillair demo`)."""
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
-import random
 import sys
 import time
 
-from . import evaluate as E
-from . import world as W
-from .agent import Agent
-from .llm import SimLLM
-from .loop import build_loop
-from .memory import Memory
-from .report import to_markdown
+from ..backends.registry import make_backend
+from ..backends.sim import SimLLM
+from ..core.agent import Agent
+from ..core.factory import build_loop
+from ..core.memory import Memory
+from ..world import generator as W
 
 _TTY = sys.stdout.isatty()
 
@@ -28,26 +23,6 @@ GREEN, RED, YEL, DIM, BOLD, CYAN = (lambda s: c(32, s)), (lambda s: c(31, s)), (
 BADGE = {"keep": GREEN("KEEP     "), "reinforce": YEL("REINFORCE"), "discard": RED("DISCARD  ")}
 
 
-def cmd_eval(a):
-    seeds = list(range(a.seeds))
-    t = time.time()
-    res = E.run_all(seeds, quick=a.quick, out_dir=a.out)
-    md = to_markdown(res)
-    with open(os.path.join(a.out, "results.md"), "w") as f:
-        f.write(md)
-    print(md)
-    print(f"\n[done in {time.time() - t:.0f}s] wrote {a.out}/results.json and {a.out}/results.md")
-
-
-def cmd_report(a):
-    with open(os.path.join(a.out, "results.json")) as f:
-        res = json.load(f)
-    md = to_markdown(res)
-    with open(os.path.join(a.out, "results.md"), "w") as f:
-        f.write(md)
-    print(md)
-
-
 def _pause(a, s=0.0):
     if not a.fast:
         time.sleep(s)
@@ -57,14 +32,12 @@ def cmd_demo(a):
     seed = a.seed
     world = W.generate(seed, n_chains=6, n_sessions=3, n_dangling_rel=3, n_dangling_prop=3, n_controls=2)
     mem = Memory()
-    real = a.backend == "claude"
+    llm = make_backend(a.backend)
+    real = llm is not None
+    ing = SimLLM(seed)  # facts are parsed from the templates either way, so entity names stay exact
+    ans = llm or SimLLM(seed + 999)
     if real:
-        from .claude_backend import ClaudeLLM
-
-        llm = ing = ans = ClaudeLLM()
-        print(DIM(f"backend: Claude ({llm.model}); the scoreboard against ground truth is skipped"))
-    else:
-        llm, ing, ans = None, SimLLM(seed), SimLLM(seed + 999)
+        print(DIM(f"backend: {llm.name} ({llm.model}); the scoreboard against ground truth is skipped"))
     loop = build_loop(mem, seed, "noise_only" if a.no_selector else "full", amplitude=0.5,
                       hallucination_rate=a.hallucination, verifier_miss=a.verifier_miss, llm=llm)
     ask = lambda q, rw=False: Agent(mem, ans, k=3, max_hops=1, readonly=not rw).ask(q)
@@ -127,41 +100,3 @@ def cmd_demo(a):
     if wrong:
         print(DIM(f'   e.g. "{wrong[0].text[:100]}"'))
     print()
-
-
-def cmd_serve(a):
-    from .live import serve
-
-    serve(a.port, a.seed)
-
-
-def main(argv=None):
-    p = argparse.ArgumentParser(prog="stillair", description=__doc__)
-    sub = p.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("demo", help="narrated terminal demo")
-    d.add_argument("--seed", type=int, default=0, help="0 = success run, 3 = a run where a confabulated link slips through")
-    d.add_argument("--steps", type=int, default=30)
-    d.add_argument("--fast", action="store_true", help="no pauses")
-    d.add_argument("--backend", choices=("sim", "claude"), default="sim", help="sim = offline simulated associator (default)")
-    d.add_argument("--no-selector", action="store_true", help="show what happens without the selector (condition B)")
-    d.add_argument("--hallucination", type=float, default=0.3)
-    d.add_argument("--verifier-miss", type=float, default=0.15, help="how often the grounding judge is fooled")
-    d.set_defaults(fn=cmd_demo)
-    s = sub.add_parser("serve", help="live web dashboard")
-    s.add_argument("--port", type=int, default=8765)
-    s.add_argument("--seed", type=int, default=0)
-    s.set_defaults(fn=cmd_serve)
-    e = sub.add_parser("eval", help="run the three-condition experiment and write results/")
-    e.add_argument("--seeds", type=int, default=20)
-    e.add_argument("--quick", action="store_true")
-    e.add_argument("--out", default="results")
-    e.set_defaults(fn=cmd_eval)
-    r = sub.add_parser("report", help="rebuild results/results.md from results/results.json")
-    r.add_argument("--out", default="results")
-    r.set_defaults(fn=cmd_report)
-    args = p.parse_args(argv)
-    args.fn(args)
-
-
-if __name__ == "__main__":
-    main()

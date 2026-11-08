@@ -32,9 +32,12 @@ class Nudge:
 
 
 class Perturbation:
-    def __init__(self, rng: random.Random, amplitude: float = 0.5, use_state: bool = True, noise_nodes: int = 2):
+    EXPLORE_AMPLITUDE = 0.75  # adaptive mode: the amplitude used when not chasing an open question
+
+    def __init__(self, rng: random.Random, amplitude: float = 0.5, use_state: bool = True, noise_nodes: int = 2, adaptive: bool = False):
         self.rng = rng
         self.amplitude = amplitude
+        self.adaptive = adaptive  # focus fully on open questions, explore otherwise
         self.use_state = use_state
         self.noise_nodes = noise_nodes
         self.focus: dict = {}
@@ -63,6 +66,8 @@ class Perturbation:
         if not drive:
             return Nudge(noise, "noise", 1.0, "no focus yet")
         a = self.amplitude
+        if self.adaptive:
+            a = 0.0 if source == "open_question" else self.EXPLORE_AMPLITUDE
         return Nudge(mix([(1 - a, drive), (a, noise)]), source, a, note)
 
     def seed(self, vec: dict) -> None:

@@ -137,6 +137,18 @@ class Memory:
         self.self_model["pruned"] += len(pruned)
         return pruned
 
+    def unconfirmed(self) -> set:
+        """Ids of connections that have never been re-derived or used."""
+        return {n.id for n in self.nodes.values() if n.kind == "connection" and n.hits == 0}
+
+    def expire_unconfirmed(self, step: int, max_age: int) -> list:
+        """Remove connections still unconfirmed `max_age` steps after they were written."""
+        expired = [i for i in self.unconfirmed() if step - self.nodes[i].born >= max_age]
+        for i in expired:
+            self.remove(i)
+        self.self_model["pruned"] += len(expired)
+        return expired
+
     # ---- reading -------------------------------------------------------
     def find_claim(self, claim) -> Optional[Node]:
         k = claim_key(claim)
@@ -200,13 +212,16 @@ class Memory:
         return {"next": self._next, "self_model": self.self_model, "nodes": [n.to_json() for n in self.nodes.values()]}
 
     def save(self, path: str) -> None:
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_json(), f, indent=1)
 
     @classmethod
     def load(cls, path: str) -> "Memory":
-        with open(path) as f:
-            d = json.load(f)
+        with open(path, encoding="utf-8") as f:
+            return cls.from_json(json.load(f))
+
+    @classmethod
+    def from_json(cls, d: dict) -> "Memory":
         m = cls()
         m._next = d["next"]
         m.self_model = d["self_model"]
