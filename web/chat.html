@@ -94,9 +94,9 @@
     <div id="err" role="alert"></div>
     <h2>Memory</h2>
     <div class="stats" id="stats"></div>
-    <h2>Still working on</h2>
-    <div id="problems"></div>
-    <h2>Worked out while idle</h2>
+    <h2>Reminders coming up</h2>
+    <div id="reminders"></div>
+    <h2>Connections it made</h2>
     <div id="hunches"></div>
     <h2>What it is thinking about</h2>
     <div id="thoughts"></div>
@@ -107,13 +107,13 @@ const $ = id => document.getElementById(id);
 let S = null, waiting = false, pendingText = null;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 const post = (path, body) => fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-const CLS = {'concluded':'ok', 'already known':'no', 'dead end':'no', 'thinking':'no', 'digested':'warn', 'read':'warn', 'let go':'warn'};
+const CLS = {'connected':'ok', 'already known':'no', 'no link':'no', 'digested':'warn', 'read':'warn', 'skipped':'no'};
 
 function renderTurns() {
   const box = $('turns'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
-  const items = S.turns.map(t => `<div class="msg ${t.role === 'user' ? 'user' : 'assistant'}${t.unprompted ? ' unprompted' : ''}">${t.unprompted ? '<small>Brought up on its own</small>' : ''}${esc(t.text)}</div>`);
+  const items = S.turns.map(t => `<div class="msg ${t.role === 'user' ? 'user' : 'assistant'}${t.unprompted ? ' unprompted' : ''}">${t.unprompted ? '<small>On its own</small>' : ''}${esc(t.text)}</div>`);
   if (pendingText !== null) items.push(`<div class="msg user">${esc(pendingText)}</div><div class="msg assistant">Thinking…</div>`);
-  box.innerHTML = items.join('') || '<div class="empty">Tell it a few things about yourself, then stop typing and watch the panel on the right.</div>';
+  box.innerHTML = items.join('') || '<div class="empty">Tell it about your plans, appointments and interests, then stop typing and watch the panel on the right.</div>';
   if (atEnd || waiting) box.scrollTop = box.scrollHeight;
 }
 function render() {
@@ -130,9 +130,9 @@ function render() {
   if (document.activeElement !== $('limit')) $('limit').value = S.limit_minutes === null ? '' : String(S.limit_minutes);
   const left = S.status === 'thinking' && S.minutes_left !== null ? ` (about ${S.minutes_left} min left)` : '';
   $('status').textContent = S.checking ? 'large model is checking everything that happened' : S.responding ? 'paused while you are talking' : S.status + left;
-  $('problems').innerHTML = S.problems.map(p => `<div class="card">${esc(p.text)}<small>${p.resting ? 'letting it go for a while · ' : ''}tried ${p.attempts} time${p.attempts === 1 ? '' : 's'}</small></div>`).join('') || '<div class="stats">Nothing unsolved.</div>';
+  $('reminders').innerHTML = S.reminders.map(r => `<div class="card">${esc(r.text)}<small>${esc(new Date(r.at * 1000).toLocaleString())}</small></div>`).join('') || '<div class="stats">None set.</div>';
   $('err').textContent = S.error || '';
-  $('stats').textContent = `${S.memories} memories · ${S.hunches.length} worked out · meaning search ${S.meaning_search ? 'on' : 'off'}`;
+  $('stats').textContent = `${S.memories} from the chat · ${S.readings} Wikipedia pages · ${S.hunches.length} connections · meaning search ${S.meaning_search ? 'on' : 'off'}`;
   $('hunches').innerHTML = S.hunches.slice().reverse().map(h => `<div class="card">${esc(h.text)}<small>${h.confirmed ? 'checked' : 'not checked yet'} · used ${h.used} time${h.used === 1 ? '' : 's'}</small></div>`).join('') || '<div class="stats">None yet.</div>';
   $('thoughts').innerHTML = S.thoughts.slice().reverse().slice(0, 15).map(t => `<div class="card">${esc(t.a)}${t.b ? ' <b>+</b> ' + esc(t.b) : ''}${t.link ? '<br>→ ' + esc(t.link) : ''}<small class="${CLS[t.outcome] || ''}">${esc(t.outcome)}</small></div>`).join('') || '<div class="stats">Nothing yet.</div>';
   renderTurns();
@@ -147,7 +147,7 @@ $('form').onsubmit = async e => {
 };
 $('newchat').onclick = async () => { await post('/api/chat/new', {}); await refresh(); $('text').focus(); };
 $('clearchat').onclick = async () => {
-  if (!confirm('Clear this conversation? Long-term memory and hunches are kept.')) return;
+  if (!confirm('Clear this conversation? Long-term memory and connections are kept.')) return;
   await post('/api/chat/clear', {}); await refresh(); $('text').focus();
 };
 $('chats').onchange = async () => { await post('/api/chat/open', {id: +$('chats').value}); $('chats').blur(); await refresh(); };

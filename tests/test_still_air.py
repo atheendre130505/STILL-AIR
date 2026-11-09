@@ -7,22 +7,23 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from stillair.conscious import NOTED, unanswered_messages
 from stillair.links import MEANING_FLOOR, Embedder, Links
 from stillair.model import Model
+from stillair.reminders import due_reminders, schedule_reminders, with_connections
 from stillair.session import ChatSession
 from stillair.state import SharedState
-from stillair.subconscious import SYSTEM, Subconscious
+from stillair.subconscious import MAX_READINGS, SYSTEM, Subconscious, from_the_chat, says_nothing, uses_both
 
 
 def setup():
     state = SharedState()
     links = Links(state)
-    return state, links, Subconscious(SimpleNamespace(), state, links, random.Random(1))
+    return state, links, Subconscious(SimpleNamespace(), state, links)
 
 
 def note(state, text, **meta):
@@ -33,8 +34,8 @@ def link(state, text="a connection", parents=(), **meta):
     return state.mem.add("connection", text, "subconscious", parents, meta)
 
 
-def problem(state, text, **meta):
-    return state.mem.add("problem", text, "digest", meta={"status": "open", "attempts": 0, "tried": [], **meta})
+def page(state, text, **meta):
+    return state.mem.add("reading", text, "wikipedia", meta={"topic": "t", **meta})
 
 
 class TestRelatedness(unittest.TestCase):
@@ -68,161 +69,208 @@ class TestRelatedness(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2.0)
 
 
-class TestWhatItThinksAbout(unittest.TestCase):
-    def test_unsolved_problems_get_most_of_the_attention(self):
-        state, _, sub = setup()
-        note(state, "alpha one", at=time.time())
-        p = problem(state, "a hard sum")
-        picks = []
-        for i in range(6):
-            sub.chains_started = i
-            picks.append(sub._pick_focus().id)
-        self.assertEqual(picks.count(p.id), 4)
+class TestConnecting(unittest.TestCase):
+    def answers(self, sub, reply):
+        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: (reply, 5))
 
-    def test_least_tried_problem_comes_first(self):
+    def test_the_closest_pair_is_compared_first(self):
         state, _, sub = setup()
-        problem(state, "tried a lot", attempts=4)
-        fresh = problem(state, "not tried")
-        self.assertEqual(sub._pick_focus().id, fresh.id)
+        a, b = note(state, "x", vec=[1.0, 0.0]), note(state, "y", vec=[0.6, 0.8])
+        c = note(state, "z", vec=[0.9, 0.43589])
+        self.assertEqual({n.id for n in sub.next_pair()}, {a.id, c.id})
 
-    def test_recent_and_unvisited_facts_come_first(self):
+    def test_unrelated_memories_are_never_compared(self):
         state, _, sub = setup()
-        t = time.time()
-        stale, fresh, visited = note(state, "b two", at=t - 86400), note(state, "a one", at=t), note(state, "c three", at=t, visits=3)
-        self.assertGreater(sub.salience(fresh), sub.salience(stale))
-        self.assertGreater(sub.salience(fresh), sub.salience(visited))
+        note(state, "apples oranges", vec=[1.0, 0.0])
+        note(state, "trains planes", vec=[0.0, 1.0])
+        self.assertIsNone(sub.next_pair())
 
-    def test_a_distraction_can_come_to_mind(self):
+    def test_two_wikipedia_pages_are_never_compared(self):
         state, _, sub = setup()
-        focus = note(state, "apples oranges")
-        far = note(state, "completely different subject")
-        sub.rng = SimpleNamespace(random=lambda: 0.0, choice=lambda items: items[0])
-        self.assertIn(far, sub._comes_to_mind({"steps": []}, focus))
+        page(state, "alpha beta", vec=[1.0, 0.0])
+        page(state, "alpha beta gamma", vec=[1.0, 0.0])
+        self.assertIsNone(sub.next_pair())
 
-    def test_nothing_to_think_about_with_one_memory(self):
+    def test_a_pair_is_only_compared_once(self):
         state, _, sub = setup()
-        sub.links.embedder = None
+        a, b = note(state, "dentist friday"), note(state, "wedding friday")
+        self.answers(sub, {"connected": False, "connection": ""})
+        sub.compare(a, b)
+        self.assertIsNone(sub.next_pair())
+        self.assertFalse(sub.think_once())
+
+    def test_a_connection_is_stored_with_both_parents(self):
+        state, _, sub = setup()
+        a, b = note(state, "dentist friday"), note(state, "wedding friday")
+        self.answers(sub, {"connected": True, "connection": "The dentist and the wedding clash."})
+        sub.compare(a, b)
+        c = state.mem.connections()[0]
+        self.assertEqual(c.parents, [a.id, b.id])
+        self.assertEqual(state.thoughts[-1]["outcome"], "connected")
+
+    def test_a_connection_must_use_both_sides(self):
+        state, _, sub = setup()
+        a, b = note(state, "dentist friday"), note(state, "wedding friday")
+        self.assertFalse(uses_both("The dentist is expensive", a, b))
+        self.answers(sub, {"connected": True, "connection": "The dentist is expensive"})
+        sub.compare(a, b)
+        self.assertEqual(state.mem.connections(), [])
+
+    def test_saying_nothing_is_not_a_connection(self):
+        for empty in ("No further thoughts or connections identified.", "Nothing new", "", "None", "Unable to determine"):
+            self.assertTrue(says_nothing(empty), empty)
+        self.assertFalse(says_nothing("Both are on Friday"))
+
+    def test_a_garbled_reply_stores_nothing(self):
+        state, _, sub = setup()
+        a, b = note(state, "dentist friday"), note(state, "wedding friday")
+        self.answers(sub, None)
+        sub.compare(a, b)
+        self.assertEqual(state.mem.connections(), [])
+
+    def test_a_failure_of_the_small_model_does_not_use_up_the_pair(self):
+        state, _, sub = setup()
+        a, b = note(state, "dentist friday"), note(state, "wedding friday")
+        def fail(*a, **k):
+            raise OSError("down")
+        sub.llm = SimpleNamespace(ask_json=fail)
+        with self.assertRaises(OSError):
+            sub.compare(a, b)
+        self.assertEqual(state.compared, set())
+
+    def test_nothing_to_do_with_one_memory(self):
+        state, _, sub = setup()
         note(state, "only one")
         self.assertFalse(sub.think_once())
 
 
-class TestChains(unittest.TestCase):
-    def chain_on(self, state, sub, focus, reply, steps=()):
-        sub.chain = {"focus": focus.id, "goal": "goal", "steps": list(steps)}
-        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: (reply, 5))
-        sub._step()
+class TestWikipedia(unittest.TestCase):
+    def stub(self, sub, log):
+        def search(q, skip):
+            log.append(q)
+            return [{"title": "Page", "key": "Page", "excerpt": "x"}] if "Page" not in skip else []
+        sub.outside = SimpleNamespace(search=search, page=lambda k: {"title": "Page", "text": "A page."})
 
-    def test_dead_end_is_remembered_so_the_next_attempt_differs(self):
+    def digest(self, sub, state, said, topics):
+        state.undigested.append({"user": said, "assistant": "ok"})
+        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: ({"notes": [], "topics": topics}, 5))
+        sub.digest()
+
+    def test_a_topic_must_be_words_from_the_chat(self):
+        self.assertTrue(from_the_chat("black walnut", "I planted a black walnut tree"))
+        self.assertFalse(from_the_chat("deductive reasoning", "I planted a black walnut tree"))
+
+    def test_only_topics_from_the_chat_are_queued(self):
         state, _, sub = setup()
-        p = problem(state, "a hard sum")
-        note(state, "a hard sum needs care")
-        self.chain_on(state, sub, p, {"thought": "tried factoring", "status": "dead_end", "conclusion": "", "used_ids": [], "important": False}, steps=["a", "b"])
-        self.assertEqual(p.meta["tried"], ["tried factoring"])
-        self.assertEqual(p.meta["attempts"], 1)
-        self.assertIsNone(sub.chain)
+        self.stub(sub, [])
+        self.digest(sub, state, "I planted a black walnut tree", ["black walnut", "quantum physics"])
+        self.assertEqual(state.topics, ["black walnut"])
 
-    def test_a_garbled_reply_is_retried_not_counted_as_a_dead_end(self):
+    def test_a_topic_is_not_looked_up_twice(self):
         state, _, sub = setup()
-        p = problem(state, "a hard sum")
-        note(state, "a hard sum needs care")
-        self.chain_on(state, sub, p, None)
-        self.assertIsNotNone(sub.chain)
-        self.assertEqual(p.meta["attempts"], 0)
+        self.stub(sub, [])
+        self.digest(sub, state, "I planted a black walnut tree", ["black walnut"])
+        sub.read_next()
+        self.digest(sub, state, "the black walnut is tall", ["black walnut"])
+        self.assertEqual(state.topics, [])
 
-    def test_a_chain_does_not_give_up_on_its_first_step(self):
+    def test_reading_stores_the_page_and_its_topic(self):
         state, _, sub = setup()
-        p = problem(state, "a hard sum")
-        note(state, "a hard sum needs care")
-        self.chain_on(state, sub, p, {"thought": "stuck", "status": "dead_end", "conclusion": "", "used_ids": [], "important": False})
-        self.assertEqual(sub.chain["steps"], ["stuck"])
+        log = []
+        self.stub(sub, log)
+        state.topics.append("black walnut")
+        sub.read_next()
+        self.assertEqual(log, ["black walnut"])
+        reading = state.mem.readable()[0]
+        self.assertEqual((reading.kind, reading.meta["topic"]), ("reading", "black walnut"))
 
-    def test_a_chain_continues_until_it_has_run_its_course(self):
+    def test_the_result_closest_to_the_topic_is_chosen(self):
+        state, links, sub = setup()
+        chosen = []
+        links.embedder = SimpleNamespace(embed=lambda texts: [[0.0, 1.0], [1.0, 0.0]] if len(texts) == 2 else [[1.0, 0.0]])
+        sub.outside = SimpleNamespace(search=lambda q, skip: [{"title": "Far", "key": "far", "excerpt": ""}, {"title": "Near", "key": "near", "excerpt": ""}], page=lambda k: chosen.append(k) or {"title": k, "text": "t"})
+        state.topics.append("walnut")
+        sub.read_next()
+        self.assertEqual(chosen, ["near"])
+
+    def test_a_result_too_far_from_the_topic_is_skipped(self):
+        state, links, sub = setup()
+        links.embedder = SimpleNamespace(embed=lambda texts: [[0.0, 1.0]] if texts != ["walnut"] else [[1.0, 0.0]])
+        sub.outside = SimpleNamespace(search=lambda q, skip: [{"title": "Far", "key": "far", "excerpt": ""}], page=lambda k: {"title": k, "text": "t"})
+        state.topics.append("walnut")
+        sub.read_next()
+        self.assertEqual(state.mem.readable(), [])
+        self.assertEqual(state.thoughts[-1]["outcome"], "skipped")
+
+    def test_only_the_newest_uncited_readings_are_kept(self):
         state, _, sub = setup()
-        f = note(state, "topic alpha")
-        note(state, "topic beta")
-        self.chain_on(state, sub, f, {"thought": "one", "status": "continue", "conclusion": "", "used_ids": [], "important": False})
-        self.assertEqual(sub.chain["steps"], ["one"])
-        for _ in range(4):
-            sub._step()
-        self.assertIsNone(sub.chain)
+        kept = page(state, "cited", cited=True)
+        for i in range(MAX_READINGS + 5):
+            page(state, f"page {i}")
+        sub._keep_newest_readings()
+        readings = [n for n in state.mem.readable() if n.kind == "reading"]
+        self.assertEqual(len(readings), MAX_READINGS + 1)
+        self.assertIn(kept, readings)
 
-    def test_conclusion_must_cite_a_memory_it_was_shown(self):
-        state, _, sub = setup()
-        f, _ = note(state, "topic alpha"), note(state, "topic beta")
-        self.chain_on(state, sub, f, {"thought": "t", "status": "concluded", "conclusion": "Made up", "used_ids": [999], "important": False})
-        self.assertEqual(state.mem.connections(), [])
-
-    def test_solving_a_problem_asks_the_large_model_to_check(self):
-        state, _, sub = setup()
-        p = problem(state, "topic alpha sum")
-        note(state, "topic alpha hint")
-        self.chain_on(state, sub, p, {"thought": "t", "status": "concluded", "conclusion": "The answer is 4", "used_ids": [], "important": False})
-        self.assertEqual(p.meta["status"], "proposed")
-        self.assertEqual(state.escalations, [state.mem.connections()[0].id])
-
-    def test_ordinary_conclusion_does_not_bother_the_large_model(self):
-        state, _, sub = setup()
-        f, other = note(state, "topic alpha"), note(state, "topic alpha beta")
-        self.chain_on(state, sub, f, {"thought": "t", "status": "concluded", "conclusion": "They relate in a specific way", "used_ids": [other.id], "important": False})
-        self.assertEqual(len(state.mem.connections()), 1)
-        self.assertEqual(state.escalations, [])
-
-
-class TestIncubation(unittest.TestCase):
-    def test_after_repeated_failure_it_rests_and_forgets_the_attempts(self):
-        state, _, sub = setup()
-        p = problem(state, "a hard sum", tried=["one", "two"])
-        sub._end_chain({"goal": "g", "steps": ["three"]}, p, "dead end", "", 0)
-        self.assertEqual(p.meta["tried"], [])
-        self.assertEqual(p.meta["archived"], ["one", "two", "three"])
-        self.assertGreater(p.meta["rest_until"], time.time())
-
-    def test_a_resting_problem_is_not_picked(self):
-        state, _, sub = setup()
-        problem(state, "a hard sum", rest_until=time.time() + 100)
-        note(state, "alpha one", at=time.time())
-        self.assertEqual(sub._pick_focus().kind, "fact")
-
-    def test_new_related_information_wakes_a_sleeping_problem_first(self):
-        state, _, sub = setup()
-        p = problem(state, "plants dying", vec=[1.0, 0.0], rest_until=time.time() + 100)
-        other = problem(state, "a sum", vec=[0.0, 1.0])
-        new = note(state, "the heating is on", vec=[1.0, 0.1])
-        sub._wake_problems(new)
-        self.assertEqual(sub._pick_focus().id, p.id)
-        self.assertNotIn("woken_by", other.meta)
-
-    def test_what_woke_it_comes_to_mind(self):
-        state, _, sub = setup()
-        p = problem(state, "aaa bbb")
-        spark = note(state, "ccc ddd")
-        self.assertIn(spark, sub._comes_to_mind({"steps": [], "woken_by": spark.id}, p))
-
-    def test_targeted_reading_sends_keywords_only_and_wakes_the_problem(self):
-        state, _, sub = setup()
-        p = problem(state, "Why do my tomato plants keep wilting after watering")
-        sent = []
-        sub.outside = SimpleNamespace(about=lambda k: sent.extend(k) or {"title": "Juglone", "text": "A compound from walnut trees."}, random=lambda: None)
-        sub.rng = SimpleNamespace(choice=lambda items: items[0], random=lambda: 1.0)
-        sub.read_something()
-        self.assertLessEqual(len(sent), 3)
-        self.assertTrue(p.meta["woken_by"])
-        self.assertEqual([n.kind for n in state.mem.readable()].count("reading"), 1)
-
-    def test_replies_never_see_outside_reading(self):
+    def test_replies_never_see_raw_wikipedia(self):
         state, links, _ = setup()
-        state.mem.add("reading", "walnut trees release juglone", "wikipedia", meta={})
+        page(state, "walnut trees release juglone")
         self.assertEqual(links.search("walnut juglone"), [])
-        self.assertEqual(len(links.search("walnut juglone", include_outside=True)), 1)
 
-    def test_unused_reading_expires_but_cited_reading_stays(self):
-        state, _, sub = setup()
-        kept = state.mem.add("reading", "one", "wikipedia", meta={"read_at_chain": 0, "cited": True})
-        gone = state.mem.add("reading", "two", "wikipedia", meta={"read_at_chain": 0})
-        sub.chains_started = 20
-        sub._expire_readings()
-        self.assertIn(kept.id, state.mem.nodes)
-        self.assertNotIn(gone.id, state.mem.nodes)
+
+class TestReminders(unittest.TestCase):
+    def later(self, minutes):
+        return (datetime.now() + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+    def test_future_reminders_are_stored_and_bad_ones_skipped(self):
+        state = SharedState()
+        added = schedule_reminders(state, [{"text": "Doctor at 3", "remind_at": self.later(10)}, {"text": "past", "remind_at": self.later(-10)},
+                                           {"text": "garbled", "remind_at": "soon"}, {"remind_at": self.later(10)}])
+        self.assertEqual(added, 1)
+        self.assertEqual(state.reminders[0]["text"], "Doctor at 3")
+
+    def test_the_same_reminder_is_not_set_twice(self):
+        state = SharedState()
+        schedule_reminders(state, [{"text": "Doctor at 3", "remind_at": self.later(10)}])
+        self.assertEqual(schedule_reminders(state, [{"text": "doctor at 3", "remind_at": self.later(20)}]), 0)
+
+    def test_a_trailing_z_is_read_as_local_time(self):
+        state = SharedState()
+        self.assertEqual(schedule_reminders(state, [{"text": "x", "remind_at": self.later(10) + "Z"}]), 1)
+
+    def test_a_reminder_is_delivered_once_when_due(self):
+        state = SharedState()
+        state.reminders.append({"text": "Doctor", "at": time.time() - 1, "fired": False})
+        state.reminders.append({"text": "Later", "at": time.time() + 1000, "fired": False})
+        self.assertEqual([r["text"] for r in due_reminders(state)], ["Doctor"])
+        self.assertEqual(due_reminders(state), [])
+
+    def test_a_reminder_appears_unprompted_without_any_model(self):
+        def refuse(*a, **k):
+            raise AssertionError("no model is needed to remind")
+        model = SimpleNamespace(name="m", tokens_used=0, calls=0, ask_json=refuse)
+        s = ChatSession(model, model, autostart=False)
+        self.addCleanup(s.close)
+        s.state.reminders.append({"text": "Doctor at 3pm", "at": time.time() - 1, "fired": False})
+        s.deliver_reminders()
+        self.assertEqual(s.state.turns[-1]["text"], "Doctor at 3pm")
+        self.assertTrue(s.state.turns[-1]["unprompted"])
+
+    def test_a_reminder_brings_its_connections(self):
+        state, links, _ = setup()
+        doctor = note(state, "doctor appointment friday")
+        report = note(state, "blood report collected")
+        link(state, "Take the blood report to the doctor appointment.", [doctor.id, report.id])
+        self.assertIn("Also: Take the blood report", with_connections(links, "doctor appointment friday"))
+
+    def test_the_reply_can_set_a_reminder(self):
+        reply = {"reply": "Noted.", "used_ids": [], "wrong_ids": [], "reminders": [{"text": "Doctor", "remind_at": self.later(30)}]}
+        model = SimpleNamespace(name="m", tokens_used=0, calls=0, ask_json=lambda *a, **k: (reply, 5))
+        s = ChatSession(model, model, autostart=False)
+        self.addCleanup(s.close)
+        s.say("I have a doctor appointment soon")
+        self.assertEqual(len(s.state.reminders), 1)
+        self.assertEqual(len(s.state.undigested), 1)
 
 
 class TestMemoryKeepsOnlyWhatMatters(unittest.TestCase):
@@ -256,23 +304,20 @@ class TestMemoryKeepsOnlyWhatMatters(unittest.TestCase):
 
 
 class TestDigesting(unittest.TestCase):
-    def test_notes_and_problems_are_kept_and_solved_ones_close(self):
+    def test_notes_are_kept(self):
         state, _, sub = setup()
-        old = problem(state, "an old puzzle")
-        state.undigested.append({"user": "u", "assistant": "a"})
-        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: ({"notes": ["Ram loves Van Gogh."], "problems": ["Prove the identity holds."], "solved_ids": [old.id]}, 5))
+        state.undigested.append({"user": "Ram loves Van Gogh", "assistant": "a"})
+        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: ({"notes": ["Ram loves Van Gogh.", " "], "topics": []}, 5))
         sub.digest()
         self.assertEqual(state.undigested, [])
-        self.assertEqual(old.meta["status"], "solved")
-        self.assertEqual([p.text for p in state.open_problems()], ["Prove the identity holds."])
-        self.assertTrue(any(n.text == "Ram loves Van Gogh." for n in state.mem.readable()))
+        self.assertEqual([n.text for n in state.mem.readable()], ["Ram loves Van Gogh."])
 
-    def test_blank_items_are_ignored(self):
+    def test_the_assistants_advice_is_not_remembered_as_the_persons(self):
         state, _, sub = setup()
-        state.undigested.append({"user": "u", "assistant": "a"})
-        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: ({"notes": [" "], "problems": [""], "solved_ids": []}, 5))
+        state.undigested.append({"user": "What should I take to the doctor?", "assistant": "Bring your insurance card."})
+        sub.llm = SimpleNamespace(ask_json=lambda *a, **k: ({"notes": ["bring your health-insurance card and photo ID"], "topics": []}, 5))
         sub.digest()
-        self.assertEqual(len(state.mem.nodes), 0)
+        self.assertEqual(state.mem.readable(), [])
 
     def test_failed_digest_is_retried_once_then_given_up(self):
         state, _, sub = setup()
@@ -295,40 +340,23 @@ class TestWithLargeModelOff(unittest.TestCase):
         self.addCleanup(s.close)
         return s
 
-    def test_message_goes_to_the_subconscious_only(self):
+    def test_messages_are_collected_for_the_small_model(self):
         s = self.session()
-        self.assertEqual(s.say("I am stuck on a sum"), NOTED)
-        self.assertTrue(s.state.undigested[0]["direct"])
+        s.say("I like black walnut furniture")
+        self.assertEqual(s.state.undigested[0]["user"], "I like black walnut furniture")
 
     def test_switching_on_checks_everything_that_happened(self):
         s = self.session()
-        p = problem(s.state, "a sum", status="solved")
-        good, bad = link(s.state, "right", about=p.id), link(s.state, "wrong", about=p.id)
-        s.conscious.llm = SimpleNamespace(ask_json=lambda *a, **k: ({"wrong_ids": [bad.id], "message": "Here is what held up."}, 5))
+        good, bad = link(s.state, "right"), link(s.state, "wrong")
+        answer = {"wrong_ids": [bad.id], "message": "Here is what held up.", "reminders": []}
+        s.conscious.llm = SimpleNamespace(ask_json=lambda *a, **k: (answer, 5))
         s.conscious.catch_up(["what is 2 plus 2"])
         self.assertTrue(good.meta["confirmed"])
         self.assertNotIn(bad.id, s.state.mem.nodes)
-        self.assertEqual(p.meta["status"], "open")
         self.assertTrue(s.state.turns[-1]["unprompted"])
-
-    def test_conclusion_is_posted_marked_as_unchecked(self):
-        s = self.session()
-        p = problem(s.state, "a sum")
-        c = link(s.state, "The answer is 4", about=p.id)
-        s.state.escalations.append(c.id)
-        s.post_unchecked()
-        self.assertIn("not checked", s.state.turns[-1]["text"])
-        self.assertTrue(s.state.turns[-1]["unprompted"])
-        self.assertEqual(p.meta["status"], "solved")
 
 
 class TestChatsAndClearing(unittest.TestCase):
-    def test_counts_unanswered_messages(self):
-        state = SharedState()
-        state.add_turn("user", "hello")
-        state.add_turn("assistant", "one", unprompted=True)
-        self.assertEqual(unanswered_messages(state), 1)
-
     def test_new_and_cleared_chats_keep_memory(self):
         state = SharedState()
         state.add_turn("user", "first")
@@ -342,28 +370,42 @@ class TestChatsAndClearing(unittest.TestCase):
 
     def test_clear_memory_keeps_chats(self):
         state, _, _ = setup()
-        problem(state, "a sum")
+        note(state, "alpha one")
         state.undigested.append({"user": "u", "assistant": "a"})
+        state.reminders.append({"text": "x", "at": 1.0, "fired": False})
         state.add_turn("user", "keep this")
         state.clear_memory()
-        self.assertEqual((len(state.mem.nodes), state.undigested, state.open_problems()), (0, [], []))
+        self.assertEqual((len(state.mem.nodes), state.undigested, state.reminders), (0, [], []))
         self.assertEqual(state.turns[0]["text"], "keep this")
 
     def test_survives_a_restart_and_older_files_load(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "m.json")
             state = SharedState(path)
-            a = problem(state, "a sum")
+            a = note(state, "alpha one")
             state.undigested.append({"user": "u", "assistant": "a"})
+            state.compared.add((1, 2))
+            state.reminders.append({"text": "x", "at": 1.0, "fired": False})
             state.save()
             again = SharedState(path)
-            self.assertEqual(again.open_problems()[0].id, a.id)
-            self.assertEqual(again.undigested, state.undigested)
+            self.assertIn(a.id, again.mem.nodes)
+            self.assertEqual((again.undigested, again.compared, again.reminders), (state.undigested, state.compared, state.reminders))
             old = {"memory": {"next": 2, "nodes": [{"id": 1, "kind": "fact", "text": "older", "claim": None, "source": "user", "parents": [], "strength": 1.0, "hits": 0, "meta": {}}]},
                    "turns": [{"role": "user", "text": "older words"}], "thoughts": [], "tried": []}
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(old, f)
             self.assertEqual(SharedState(path).turns[0]["text"], "older words")
+
+    def test_older_files_lose_problems_and_random_material_but_keep_notes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "m.json")
+            state = SharedState(path)
+            kept = note(state, "my own words")
+            state.mem.add("problem", "a sum", "user")
+            state.mem.add("reading", "random page", "wikipedia")
+            link(state, "from a chain", [kept.id], about=1)
+            state.save()
+            self.assertEqual(list(SharedState(path).mem.nodes), [kept.id])
 
 
 @unittest.skipUnless(os.environ.get("STILLAIR_LIVE_TESTS"), "set STILLAIR_LIVE_TESTS=1 to run on the real local models")

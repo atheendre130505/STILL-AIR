@@ -1,19 +1,18 @@
-"""Runs the two minds together: the conscious answers, the subconscious fills the silence."""
+"""Runs the two minds together: the conscious answers, the subconscious fills the silence, the clock reminds."""
 
 from __future__ import annotations
 
 import threading
 import time
 
-from .conscious import MAX_UNANSWERED, NOTED, Conscious, unanswered_messages
+from .conscious import Conscious
 from .links import Links
+from .reminders import due_reminders, with_connections
 from .state import SharedState
 from .subconscious import Subconscious
 
-SETTLE_SECONDS = 3.0  # give the person a moment after a reply before the subconscious starts
+SETTLE_SECONDS = 1.0  # give the person a moment after a reply before the subconscious starts
 ERROR_PAUSE_SECONDS = 30.0
-VERIFY_EVERY_SECONDS = 120.0  # the large model is called rarely: at most this often while idle
-VERIFY_QUIET_SECONDS = 15.0  # never right after a reply
 CLOCK_TICK_SECONDS = 5.0
 LIMIT_CHOICES = (None, 5, 15, 60)  # minutes of thinking after each message; None = until the next message
 
@@ -34,7 +33,6 @@ class ChatSession:
         self.error = None
         self._quiet_since = time.monotonic()
         self._retry_at = 0.0
-        self._last_verify = 0.0
         self._stop = threading.Event()
         if autostart:
             threading.Thread(target=self._idle_loop, daemon=True).start()
@@ -74,35 +72,19 @@ class ChatSession:
                 self.status = "waiting for more memories"
                 self._stop.wait(1.0)
 
-    def _may_verify(self) -> bool:
-        return (not self.responding and self._quiet_for() >= VERIFY_QUIET_SECONDS and bool(self.state.escalations)
-                and time.monotonic() - self._last_verify >= VERIFY_EVERY_SECONDS and unanswered_messages(self.state) < MAX_UNANSWERED)
-
-    def post_unchecked(self) -> None:
-        """With the large model off, conclusions go straight to the chat, marked as unchecked."""
+    def deliver_reminders(self) -> None:
         with self.state.lock:
-            while self.state.escalations:
-                insight = self.state.mem.nodes.get(self.state.escalations.pop(0))
-                if insight is None:
-                    continue
-                about = self.state.mem.nodes.get(insight.meta.get("about"))
-                if about is not None and about.kind == "problem":
-                    about.meta["status"] = "solved"
-                self.state.add_turn("assistant", f"Worked out by the small model alone, not checked: {insight.text}", unprompted=True)
-            self.state.save()
+            due = due_reminders(self.state)
+        for reminder in due:
+            message = with_connections(self.links, reminder["text"])
+            with self.state.lock:
+                self.state.add_turn("assistant", message, unprompted=True)
+                self.state.save()
 
     def _clock_loop(self) -> None:
         while not self._stop.wait(CLOCK_TICK_SECONDS):
-            if not self.conscious_on:
-                self.post_unchecked()
-                continue
-            if not self._may_verify():
-                continue
-            self._last_verify = time.monotonic()
-            try:
-                self.conscious.verify_next()
-            except Exception as e:
-                self.error = f"The main model failed while checking: {e}"
+            if not self.responding:
+                self.deliver_reminders()
 
     # ---- controls -----------------------------------------------------------
     def _catch_up(self) -> None:
@@ -149,16 +131,14 @@ class ChatSession:
         def forget():
             self.state.clear_memory()
             self.links.forget()
-            self.subconscious.chain = None
         return self._unless_replying(forget)
 
     def say(self, text: str) -> str:
         self.responding = True
         try:
             if not self.conscious_on:
-                self.conscious.note_only(text)
                 self._missed.append(text)
-                return NOTED
+                return self.conscious.note_only(text)
             reply = self.conscious.respond(text)
             self.error = None
             return reply
@@ -175,12 +155,12 @@ class ChatSession:
         links = self.links.strongest_links()
         with s.lock:
             nodes = [{"id": n.id, "kind": n.kind, "text": n.text, "strength": round(n.strength, 2), "parents": n.parents,
-                      "status": n.meta.get("status"), "visits": n.meta.get("visits", 0), "used": n.hits,
+                      "used": n.hits,
                       "confirmed": bool(n.meta.get("confirmed"))} for n in s.mem.readable()]
             return {
                 "nodes": nodes, "links": links, "sub": s.sub_activity, "main": s.main_activity,
                 "thoughts": s.thoughts[-30:], "conscious": self.conscious_on, "checking": self.checking, "responding": self.responding, "status": self.status,
-                "open_problems": len(s.open_problems()), "chains": self.subconscious.chains_started,
+                "reminders": sum(not r["fired"] for r in s.reminders), "compared": len(s.compared),
                 "small_tokens": s.small_tokens, "main_tokens": self.main_llm.tokens_used, "main_calls": self.main_llm.calls,
                 "main_model": self.main_llm.name, "small_model": self.small_llm.name, "meaning_search": self.links.meaning_working,
                 "error": self.error,
@@ -201,7 +181,8 @@ class ChatSession:
                 "hunches": [{"id": n.id, "text": n.text, "strength": round(n.strength, 2), "used": n.hits, "confirmed": bool(n.meta.get("confirmed"))}
                             for n in s.mem.connections()],
                 "memories": sum(n.kind == "fact" for n in nodes),
-                "problems": [{"id": n.id, "text": n.text, "attempts": n.meta.get("attempts", 0), "resting": n.meta.get("rest_until", 0.0) > time.time()} for n in s.open_problems()],
+                "readings": sum(n.kind == "reading" for n in nodes),
+                "reminders": sorted((r for r in s.reminders if not r["fired"]), key=lambda r: r["at"]),
                 "meaning_search": self.links.meaning_working,
                 "conscious": self.conscious_on,
                 "checking": self.checking,

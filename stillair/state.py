@@ -1,4 +1,4 @@
-"""What the conscious and subconscious share: memory, the chats, and what has been tried."""
+"""What the conscious and subconscious share: memory, the chats, and the reminders."""
 
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ class SharedState:
         self.current = 1
         self.thoughts: list = []
         self.undigested: list = []  # exchanges the subconscious has not read yet
-        self.escalations: list = []  # conclusions waiting for the large model's check
+        self.topics: list = []  # things mentioned in the chat, waiting to be looked up
+        self.compared: set = set()  # pairs of memories the small model has already judged
+        self.reminders: list = []  # {"text", "at" (epoch seconds), "fired"}
         self.sub_activity: dict = {"phase": "idle"}  # what the backend view shows; not saved
         self.main_activity: dict = {"phase": "idle", "ids": []}
         self.small_tokens = 0  # this run only
@@ -39,36 +41,38 @@ class SharedState:
         with open(self.path, encoding="utf-8") as f:
             d = json.load(f)
         self.mem = Memory.from_json(d["memory"])
+        for node in self.mem.readable():  # older files hold problems, random pages and chain conclusions; only chat notes carry over
+            if node.kind == "problem" or (node.kind == "connection" and (len(node.parents) != 2 or "about" in node.meta)) or (node.kind == "reading" and "topic" not in node.meta):
+                self.mem.remove(node.id)
         old_turns = d.get("turns", [])  # files saved before chats existed held a single conversation
         self.chats = d.get("chats") or [{"id": 1, "title": _title(old_turns), "turns": old_turns}]
         self.current = d.get("current", self.chats[-1]["id"])
         self.thoughts = d["thoughts"]
         self.undigested = d.get("undigested", [])
-        self.escalations = d.get("escalations", [])
+        self.topics = d.get("topics", [])
+        self.compared = {tuple(p) for p in d.get("compared", [])}
+        self.reminders = d.get("reminders", [])
 
     def save(self) -> None:
         if not self.path:
             return
         data = {"memory": self.mem.to_json(), "chats": self.chats, "current": self.current, "thoughts": self.thoughts,
-                "undigested": self.undigested, "escalations": self.escalations}
+                "undigested": self.undigested, "topics": self.topics, "compared": sorted(self.compared), "reminders": self.reminders}
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, self.path)
 
-    def open_problems(self) -> list:
-        return [n for n in self.mem.nodes.values() if n.kind == "problem" and n.meta.get("status") == "open"]
-
     # ---- chats -------------------------------------------------------------
-    def _chat(self) -> dict:
+    def current_chat(self) -> dict:
         return next(c for c in self.chats if c["id"] == self.current)
 
     @property
     def turns(self) -> list:
-        return self._chat()["turns"]
+        return self.current_chat()["turns"]
 
     def add_turn(self, role: str, text: str, unprompted: bool = False) -> None:
-        chat = self._chat()
+        chat = self.current_chat()
         chat["turns"] = (chat["turns"] + [{"role": role, "text": text, "unprompted": unprompted}])[-MAX_TURNS:]
         chat["title"] = chat["title"] or _title(chat["turns"])
 
@@ -90,15 +94,17 @@ class SharedState:
 
     def clear_chat(self) -> None:
         """Empty the open conversation. Long-term memory is kept."""
-        chat = self._chat()
+        chat = self.current_chat()
         chat["turns"], chat["title"] = [], ""
         self.save()
 
     def clear_memory(self) -> None:
-        """Forget all memories, conclusions and problems. Chat transcripts are kept."""
+        """Forget all memories, connections and reminders. Chat transcripts are kept."""
         self.mem.clear()
         self.undigested = []
-        self.escalations = []
+        self.topics = []
+        self.compared = set()
+        self.reminders = []
         self.thoughts = []
         self.sub_activity = {"phase": "idle"}
         self.main_activity = {"phase": "idle", "ids": []}

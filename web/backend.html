@@ -67,10 +67,9 @@
     <div id="tip"></div>
     <div id="legend">
       <span><i style="background:var(--fact)"></i>your words</span>
-      <span><i style="background:var(--good)"></i>checked conclusion</span>
-      <span><i style="background:var(--good);opacity:.4"></i>unchecked conclusion</span>
-      <span><i style="background:var(--amber)"></i>unsolved problem</span>
-      <span><i style="background:var(--meaning)"></i>outside reading</span>
+      <span><i style="background:var(--good)"></i>checked connection</span>
+      <span><i style="background:var(--good);opacity:.4"></i>unchecked connection</span>
+      <span><i style="background:var(--meaning)"></i>Wikipedia, from the chat</span>
       <span><b style="background:var(--good)"></b>stored link</span>
       <span><b style="background:var(--meaning)"></b>meaning</span>
       <span><b style="background:var(--accent)"></b>words</span>
@@ -80,15 +79,15 @@
   <aside>
     <div id="err" class="err" role="alert"></div>
     <button id="clearmem" type="button">Clear memory</button>
-    <h2>Train of thought, right now</h2>
+    <h2>Subconscious, right now</h2>
     <div id="train"></div>
     <h2>Conscious, last message</h2>
     <div id="main"></div>
     <h2>Totals</h2>
     <div class="stats">
       <div class="stat"><b id="n_mem">0</b><span>your memories</span></div>
-      <div class="stat"><b id="n_hun">0</b><span>connections (+ awaiting verdict)</span></div>
-      <div class="stat"><b id="n_tried">0</b><span>unsolved problems</span></div>
+      <div class="stat"><b id="n_hun">0</b><span>connections (+ unchecked)</span></div>
+      <div class="stat"><b id="n_tried">0</b><span>reminders waiting</span></div>
       <div class="stat"><b id="n_small">0</b><span>local tokens</span></div>
       <div class="stat"><b id="n_main">0</b><span>API tokens</span></div>
     </div>
@@ -103,7 +102,7 @@ let S = null, W = 0, H = 0;
 const pos = new Map(), born = new Map();
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
-const BADGE = {'concluded':['keep','CONCLUDED'], 'thinking':['reinforce','THOUGHT'], 'already known':['reinforce','KNOWN'], 'dead end':['discard','DEAD END'], 'digested':['reinforce','DIGESTED'], 'read':['reinforce','READ'], 'let go':['discard','LET GO']};
+const BADGE = {'connected':['keep','CONNECTED'], 'already known':['reinforce','KNOWN'], 'no link':['discard','NO LINK'], 'digested':['reinforce','DIGESTED'], 'read':['reinforce','READ'], 'skipped':['discard','SKIPPED']};
 
 function resize() { const r = cv.parentElement.getBoundingClientRect(), d = devicePixelRatio || 1;
   W = r.width; H = r.height; cv.width = W * d; cv.height = H * d; ctx.setTransform(d,0,0,d,0,0); }
@@ -119,16 +118,16 @@ function render() {
   const byId = new Map(nodes.map(n => [n.id, n]));
   const steps = (sub.steps || []).map((t, i) => `<div class="step on">${i + 1} · ${esc(t)}</div>`).join('');
   const came = (sub.shown || []).filter(i => byId.has(i)).map(i => esc(byId.get(i).text)).join('<br>');
-  const label = {thinking:'Thinking about', digesting:'Reading what was said', reading:'Reading', done:'Just finished'}[sub.phase];
-  $('train').innerHTML = sub.goal ? `<div class="box"><small>${label || ''}</small>${esc(sub.goal)}${sub.outcome ? `<small>Result: ${esc(sub.outcome)}</small>` : ''}</div>${steps}${came ? `<div class="box"><small>Came to mind</small>${came}</div>` : ''}` : '<div class="sub">Resting.</div>';
+  const label = {thinking:'Comparing', digesting:'Reading what was said', reading:'Looking up on Wikipedia', done:'Just compared'}[sub.phase];
+  $('train').innerHTML = sub.goal ? `<div class="box"><small>${label || ''}</small>${esc(sub.goal)}${sub.outcome ? `<small>Result: ${esc(sub.outcome)}</small>` : ''}</div>${steps}${came ? `<div class="box"><small>With</small>${came}</div>` : ''}` : '<div class="sub">Resting.</div>';
   $('clearmem').disabled = S.responding;
-  const verb = {searching:'Searching memory', replying:'Answering now', reviewing:'Reviewing hunches now'}[main.phase] || 'Last message';
+  const verb = {searching:'Searching memory', replying:'Answering now', reviewing:'Checking connections now'}[main.phase] || 'Last message';
   const search = main.searched === undefined ? '' : `Search found ${main.searched}; passed on the ${main.ids.length} most relevant`;
   $('main').innerHTML = main.text ? `<div class="box"><small>${verb}</small>${esc(main.text)}<small>${search}${main.used ? `; the main model relied on ${main.used.length}` : ''}</small></div>` : '<div class="sub">Nothing yet. Send a message in the chat.</div>';
   $('n_mem').textContent = nodes.filter(n => n.kind === 'fact').length;
   const connections = nodes.filter(n => n.kind === 'connection'), confirmed = connections.filter(n => n.confirmed).length;
   $('n_hun').textContent = confirmed + (connections.length > confirmed ? ` +${connections.length - confirmed}` : '');
-  $('n_tried').textContent = S.open_problems;
+  $('n_tried').textContent = S.reminders;
   $('n_small').textContent = S.small_tokens; $('n_main').textContent = S.main_tokens;
   const el = $('stream');
   el.innerHTML = S.thoughts.slice().reverse().map(t => { const [c, label] = BADGE[t.outcome] || ['discard', t.outcome];
@@ -175,7 +174,7 @@ function draw() {
     if (level) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 8 + 22 * level, 0, 7); ctx.fillStyle = css('--accent'); ctx.globalAlpha = .12 + .4 * level; ctx.fill(); ctx.globalAlpha = 1; }
     const age = now - (born.get(n.id) || 0);
     if (age < 1600) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 14 * (1 - age / 1600), 0, 7); ctx.strokeStyle = col; ctx.globalAlpha = 1 - age / 1600; ctx.lineWidth = 1.5; ctx.stroke(); ctx.globalAlpha = 1; }
-    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fillStyle = n.kind === 'problem' ? amber : col; ctx.globalAlpha = n.kind === 'connection' && !n.confirmed ? .4 : 1; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fillStyle = col; ctx.globalAlpha = n.kind === 'connection' && !n.confirmed ? .4 : 1; ctx.fill(); ctx.globalAlpha = 1;
     if (thinking && comparing.has(n.id)) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 4, 0, 7); ctx.strokeStyle = ring; ctx.lineWidth = 2; ctx.stroke(); }
     if (S.main.phase !== 'idle' && reading.has(n.id)) { ctx.beginPath(); ctx.arc(p.x, p.y, r + 7, 0, 7); ctx.strokeStyle = amber; ctx.lineWidth = 2; ctx.stroke(); }
   }
@@ -185,11 +184,11 @@ cv.addEventListener('mousemove', e => {
   for (const n of S.nodes) { const p = pos.get(n.id); if (!p) continue; const d = (p.x-x)**2 + (p.y-y)**2; if (d < bd) { bd = d; best = n; } }
   const tip = $('tip'); if (!best) { tip.style.display = 'none'; return; }
   tip.style.display = 'block'; tip.style.left = Math.min(x + 12, W - 330) + 'px'; tip.style.top = (y + 12) + 'px';
-  tip.innerHTML = `<b>${best.kind === 'connection' ? (best.confirmed ? 'checked conclusion' : 'unchecked conclusion') : best.kind === 'problem' ? 'problem' : best.kind === 'reading' ? 'outside reading' : 'memory'}</b> · strength ${best.strength} · used ${best.used} · picked ${best.visits} times${best.status ? ' · ' + esc(best.status) : ''}<br>${esc(best.text)}`;
+  tip.innerHTML = `<b>${best.kind === 'connection' ? (best.confirmed ? 'checked connection' : 'unchecked connection') : best.kind === 'reading' ? 'Wikipedia' : 'from the chat'}</b> · strength ${best.strength} · used ${best.used}<br>${esc(best.text)}`;
 });
 cv.addEventListener('mouseleave', () => $('tip').style.display = 'none');
 $('clearmem').onclick = async () => {
-  if (!confirm('Permanently forget all memories, conclusions and unsolved problems? This cannot be undone. Chat transcripts are kept.')) return;
+  if (!confirm('Permanently forget all memories, connections and reminders? This cannot be undone. Chat transcripts are kept.')) return;
   await fetch('/api/memory/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); pos.clear(); born.clear(); refresh();
 };
 refresh(); setInterval(refresh, 1000); requestAnimationFrame(tick);

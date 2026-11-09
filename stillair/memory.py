@@ -1,4 +1,4 @@
-"""Long-term memory: the person's own words ("fact") and connections found between them ("connection")."""
+"""Long-term memory: the person's own words ("fact"), related Wikipedia pages ("reading"), and connections between them."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def tokens(text: str) -> list:
 @dataclass
 class Node:
     id: int
-    kind: str  # fact | connection
+    kind: str  # fact | reading | connection
     text: str
     source: str = "user"
     parents: list = field(default_factory=list)
